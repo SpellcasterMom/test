@@ -1,0 +1,285 @@
+/**
+ * Project     : 6DOF arm
+ * Author      : Vladimir V. Laykov aka Yago
+ * Group       :
+ * Mentor      : Lipko I.Y.
+ * Date        :
+ * Last modify :
+ */
+
+/*
+ * eeprom_storage.cpp — Реализация модуля хранения данных в EEPROM
+ *
+ * Обеспечивает持久ное хранение конфигурации 6-DOF роботической манипуляции
+ * в энергонезависимой памяти EEPROM. Данные записываются/читаются блоком
+ * начиная с адреса 0. Для проверки целостности используется контрольная сумма.
+ *
+ * Структура данных в EEPROM (адрес 0):
+ *   [EEPROMData — ~132 байта в зависимости от компилятора]
+ *
+ * Формат контрольной суммы:
+ *   XOR всех байтов структуры (кроме checksum) с ротацией влево на 1 бит.
+ *   Это простой, но эффективный способ обнаружения ошибок чтения/записи.
+ *
+ * При сохранении:
+ *   1. Заполняется структура EEPROMData из переданных параметров
+ *   2. Вычисляется checksum и записывается в поле checksum
+ *   3. Структура записывается в EEPROM через EEPROM.put()
+ *   4. Данные фиксируются через EEPROM.commit()
+ *
+ * При загрузке:
+ *   1. Структура читается из EEPROM через EEPROM.get()
+ *   2. Проверяется magic и checksum через validateData()
+ *   3. Если данные валидны — копируются в выходные параметры
+ *   4. Если невалидны — возвращается false, вызывающий код использует defaults
+ */
+
+#include "eeprom_storage.h"
+
+/**
+ * begin — Инициализация EEPROM.
+ *
+ * Выделяет EEPROM_SIZE (512) байт памяти для операций чтения/записи.
+ * Должен быть вызван один раз в начале работы программы (обычно в setup()).
+ */
+void EEPROMStorage::begin() {
+    EEPROM.begin(EEPROM_SIZE);
+}
+
+/**
+ * saveConfig — Сохранение полной конфигурации + домашних углов в EEPROM.
+ *
+ * Алгоритм:
+ *   1. Создаётся локальная структура EEPROMData и заполняется нулями.
+ *   2. Устанавливается magic = EEPROM_MAGIC (0xABCD) для последующей валидации.
+ *   3. Копируются конфигурации 7 сервоприводов из config.servos[].
+ *   4. Копируются домашние углы из homeAngles[].
+ *   5. Копируется компенсация люфта из config.servos[i].backlashCompensation.
+ *   6. Копируются ограничения рабочей области и безопасности звеньев.
+ *   7. Устанавливается длина пальца захвата и стратегия интерполяции.
+ *   8. Вычисляется checksum через calculateChecksum() и записывается в структуру.
+ *   9. Структура сохраняется во внутренний буфер data для дальнейшего использования.
+ *  10. Структура записывается в EEPROM через EEPROM.put() и фиксируется через
+ *      EEPROM.commit() для обеспеченияERSISTENTности данных.
+ *
+ * @param config — конфигурация манипуляции для сохранения
+ * @param homeAngles — массив из 7 домашних углов сервоприводов
+ */
+void EEPROMStorage::saveConfig(const ManipulatorConfig &config, const float homeAngles[7]) {
+    EEPROMData d;
+    d.magic = EEPROM_MAGIC;
+
+    for (int i = 0; i < 7; i++) {
+        d.servos[i] = config.servos[i];
+        d.homeAngles[i] = homeAngles[i];
+        d.backlash[i] = config.servos[i].backlashCompensation;
+    }
+
+    d.workspace = config.workspace;
+    d.linkSafety = config.linkSafety;
+    d.fingerLength = config.fingerLength;
+    d.strategy = INTERP_AUTO;
+
+    d.checksum = calculateChecksum(d);
+    data = d;
+
+    EEPROM.put(0, d);
+    EEPROM.commit();
+}
+
+/**
+ * loadConfig — Загрузка полной конфигурации + домашних углов из EEPROM.
+ *
+ * Алгоритм:
+ *   1. Чтение структуры EEPROMData из EEPROM по адресу 0.
+ *   2. Валидация через validateData() — проверка magic и checksum.
+ *   3. Если данные валидны:
+ *      a. Сохранение во внутренний буфер data.
+ *      b. Копирование конфигураций сервоприводов в config.servos[].
+ *      c. Копирование домашних углов в homeAngles[].
+ *      d. Копирование ограничений рабочей области и безопасности.
+ *      e. Возврат true.
+ *   4. Если данные невалидны — возврат false (вызывающий код должен
+ *      использовать значения по умолчанию).
+ *
+ * @param config — ссылка на структуру конфигурации для заполнения
+ * @param homeAngles — массив из 7 элементов для заполнения домашних углов
+ * @return true если данные успешно загружены, false если данные невалидны
+ */
+bool EEPROMStorage::loadConfig(ManipulatorConfig &config, float homeAngles[7]) {
+    EEPROMData d;
+    EEPROM.get(0, d);
+
+    if (!validateData(d)) {
+        return false;
+    }
+
+    data = d;
+
+    for (int i = 0; i < 7; i++) {
+        config.servos[i] = d.servos[i];
+        homeAngles[i] = d.homeAngles[i];
+    }
+
+    config.workspace = d.workspace;
+    config.linkSafety = d.linkSafety;
+    config.fingerLength = d.fingerLength;
+
+    return true;
+}
+
+/**
+ * saveHome — Сохранение только домашних углов в EEPROM.
+ *
+ * Этот метод позволяет обновить домашние углы без перезаписи всей конфигурации.
+ *
+ * Алгоритм:
+ *   1. Чтение текущей структуры из EEPROM.
+ *   2. Проверка magic — если данные уже записаны (magic совпадает), они
+ *      сохраняются и обновляются только homeAngles.
+ *   3. Если magic не совпадает (EEPROM пуста или повреждена):
+ *      a. Создаётся новая структура с нулями.
+ *      b. Устанавливается magic = EEPROM_MAGIC.
+ *      c. Конфигурация сервоприводов заполняется из DEFAULT_CONFIG.
+ *      d. Ограничения рабочей области и безопасности также из DEFAULT_CONFIG.
+ *   4. Копируются переданные homeAngles в структуру.
+ *   5. Вычисляется checksum и записывается в структуру.
+ *   6. Структура сохраняется во внутренний буфер и записывается в EEPROM.
+ *
+ * @param homeAngles — массив из 7 домашних углов сервоприводов
+ */
+void EEPROMStorage::saveHome(const float homeAngles[7]) {
+    EEPROMData d;
+    EEPROM.get(0, d);
+
+    if (d.magic != EEPROM_MAGIC) {
+        d = {};
+        d.magic = EEPROM_MAGIC;
+        for (int i = 0; i < 7; i++) {
+            d.servos[i] = DEFAULT_CONFIG.servos[i];
+        }
+        d.workspace = DEFAULT_CONFIG.workspace;
+        d.linkSafety = DEFAULT_CONFIG.linkSafety;
+    }
+
+    for (int i = 0; i < 7; i++) {
+        d.homeAngles[i] = homeAngles[i];
+    }
+
+    d.checksum = calculateChecksum(d);
+    data = d;
+
+    EEPROM.put(0, d);
+    EEPROM.commit();
+}
+
+/**
+ * loadHome — Загрузка только домашних углов из EEPROM.
+ *
+ * Алгоритм:
+ *   1. Чтение структуры EEPROMData из EEPROM.
+ *   2. Валидация через validateData().
+ *   3. Если данные валидны — копирование homeAngles из структуры, возврат true.
+ *   4. Если данные невалидны — заполнение homeAngles значениями
+ *      DEFAULT_HOME_ANGLES (значения по умолчанию), возврат false.
+ *
+ * @param homeAngles — массив из 7 элементов для заполнения домашних углов
+ * @return true если данные успешно загружены, false если используются defaults
+ */
+bool EEPROMStorage::loadHome(float homeAngles[7]) {
+    EEPROMData d;
+    EEPROM.get(0, d);
+
+    if (!validateData(d)) {
+        for (int i = 0; i < 7; i++) {
+            homeAngles[i] = DEFAULT_HOME_ANGLES[i];
+        }
+        return false;
+    }
+
+    for (int i = 0; i < 7; i++) {
+        homeAngles[i] = d.homeAngles[i];
+    }
+
+    return true;
+}
+
+/**
+ * clear — Очистка EEPROM (заполнение нулями).
+ *
+ * Записывает нулевую структуру EEPROMData в EEPROM. После этого
+ * magic будет равен 0 (не совпадает с EEPROM_MAGIC = 0xABCD),
+ * что заставит все методы загрузки считать данные невалидными
+ * и использовать значения по умолчанию.
+ */
+void EEPROMStorage::clear() {
+    EEPROMData d = {};
+    EEPROM.put(0, d);
+    EEPROM.commit();
+}
+
+/**
+ * isConfigValid — Проверка корректности данных в EEPROM.
+ *
+ * Читает структуру из EEPROM и проверяет её через validateData().
+ * Не изменяет внутренний буфер data.
+ *
+ * @return true если magic и checksum совпадают, false в противном случае
+ */
+bool EEPROMStorage::isConfigValid() {
+    EEPROMData d;
+    EEPROM.get(0, d);
+    return validateData(d);
+}
+
+/**
+ * calculateChecksum — Вычисление контрольной суммы структуры EEPROMData.
+ *
+ * Алгоритм:
+ *   1. Берём все байты структуры как массив uint8_t.
+ *   2. Пропускаем байты поля checksum (2 байта по смещению offsetof(EEPROMData, checksum)).
+ *   3. Для каждого оставшегося байта:
+ *      a. Выполняем XOR с накопленным значением sum.
+ *      b. Выполняем ротацию sum влево на 1 бит (циклический сдвиг).
+ *         Это эквивалентно: (sum << 1) | (sum >> 15)
+ *   4. Возвращаем итоговое 16-битное значение.
+ *
+ * Особенности:
+ *   - Ротация после каждого XOR обеспечивает чувствительность к порядку байтов.
+ *   - Если один байт изменится, checksum изменится существенно.
+ *   - Поле checksum исключено из вычисления, чтобы его значение не влияло на себя.
+ *
+ * @param d — структура данных для вычисления контрольной суммы
+ * @return 16-битная контрольная сумма
+ */
+uint16_t EEPROMStorage::calculateChecksum(const EEPROMData &d) {
+    uint16_t sum = 0;
+    const uint8_t *ptr = (const uint8_t *)&d;
+    size_t offset = offsetof(EEPROMData, checksum);
+    for (size_t i = 0; i < sizeof(EEPROMData); i++) {
+        if (i >= offset && i < offset + sizeof(uint16_t)) continue;
+        sum ^= ptr[i];
+        sum = (sum << 1) | (sum >> 15);  // ротация влево на 1 бит
+    }
+    return sum;
+}
+
+/**
+ * validateData — Валидация данных из EEPROM.
+ *
+ * Проверяет два критических условия:
+ *   1. magic == EEPROM_MAGIC (0xABCD) — данные были записаны нашим кодом,
+ *      а не являются результатом случайной инициализации EEPROM.
+ *   2. checksum == calculateChecksum(d) — данные не повреждены при чтении/записи.
+ *
+ * Если хотя бы одно условие не выполнено, данные считаются невалидными
+ * и вызывающий код должен использовать значения по умолчанию.
+ *
+ * @param d — структура данных для валидации
+ * @return true если данные валидны, false если повреждены или отсутствуют
+ */
+bool EEPROMStorage::validateData(const EEPROMData &d) {
+    if (d.magic != EEPROM_MAGIC) return false;
+    if (d.checksum != calculateChecksum(d)) return false;
+    return true;
+}

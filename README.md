@@ -1,4 +1,4 @@
-# 6dof-2026
+# 6dof
 
 
 
@@ -15,14 +15,14 @@ Already a pro? Just edit this README.md and make it your own. Want to make it ea
 
 ```
 cd existing_repo
-git remote add origin http://192.168.2.6:20080/cpp/6dof-2026.git
+git remote add origin http://192.168.2.6:20080/cpp/6dof.git
 git branch -M master
 git push -uf origin master
 ```
 
 ## Integrate with your tools
 
-- [ ] [Set up project integrations](http://192.168.2.6:20080/cpp/6dof-2026/-/settings/integrations)
+- [ ] [Set up project integrations](http://192.168.2.6:20080/cpp/6dof/-/settings/integrations)
 
 ## Collaborate with your team
 
