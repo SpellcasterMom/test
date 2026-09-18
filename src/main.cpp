@@ -3,7 +3,7 @@
  * Author      : Vladimir V. Laykov aka Yago
  * Group       :
  * Mentor      : Lipko I.Y.
- * Date        : 2026-09-17
+ * Date        : 2026-09-18
  * Last modify : 2026-09-18
  *
  * Основной файл контроллера 6-осевого робота-манипулятора на ESP32.

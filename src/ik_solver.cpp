@@ -3,8 +3,8 @@
  * Author      : Vladimir V. Laykov aka Yago
  * Group       :
  * Mentor      : Lipko I.Y.
- * Date        :
- * Last modify :
+ * Date        : 2026-09-18
+ * Last modify : 2026-09-18
  *
  * Описание   : Реализация решателя обратной кинематики (IK) для 6-DOF
  *              манипулятора. Алгоритм разделяется на два независимых этапа:
