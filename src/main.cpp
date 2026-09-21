@@ -905,26 +905,28 @@ void setup() {
         sharedState.servoAngles[i] = homeAngles.angles[i];
     }
 
-    // Создание задачи: чтение Serial + управление движением
-    // Стек: 8192 байт, приоритет: 1
-    xTaskCreate(
+    // Создание задачи Core 0: чтение Serial + управление движением
+    // Стек: 8192 байт, приоритет: 1, привязка к ядру 0
+    xTaskCreatePinnedToCore(
         core0Task,
         "Core0_Motion",
         8192,
         NULL,
         1,
-        &core0TaskHandle
+        &core0TaskHandle,
+        0  // Core 0
     );
 
-    // Создание задачи: дисплей ST7789
-    // Стек: 8192 байт (TFT_eSPI требует больше памяти), приоритет: 1
-    xTaskCreate(
+    // Создание задачи Core 1: дисплей ST7789
+    // Стек: 8192 байт (TFT_eSPI требует больше памяти), приоритет: 1, привязка к ядру 1
+    xTaskCreatePinnedToCore(
         core1Task,
         "Core1_Display",
         8192,
         NULL,
         1,
-        &core1TaskHandle
+        &core1TaskHandle,
+        1  // Core 1
     );
 
     Serial.println("Ready. Send G-code commands.");
