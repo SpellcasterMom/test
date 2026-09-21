@@ -239,5 +239,5 @@ uint16_t ServoController::angleToPulse(int servoId, float angle) {
     // Период ШИМ = 20000 мкс, разрешение = 4096 тиков.
     // 1 тик = 20000 / 4096 ≈ 4.8828 мкс.
     // Формула: ticks = pulse_us / (20000 / 4096) = pulse_us * 4096 / 20000
-    return (uint16_t)(pulse * 4096.0f / 20000.0f * 1000.0f);
+    return (uint16_t)(pulse * 4096.0f / 20000.0f);
 }

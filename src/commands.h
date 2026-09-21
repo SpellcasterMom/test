@@ -243,16 +243,17 @@ const CommandDef COMMANDS[] = {
         .name = "M410",
         .description = "Set forbidden zone: M410 X1=0 X2=200 Y1=-50 Y2=50 Z1=0 Z2=50",
         // Параметры M410:
-        //   X — (заглушка, не используется; реальные параметры — X1, X2, Y1, Y2, Z1, Z2)
-        //   X1, X2 — границы запретной зоны по оси X (мм)
-        //   Y1, Y2 — границы запретной зоны по оси Y (мм)
-        //   Z1, Z2 — границы запретной зоны по оси Z (мм)
-        // Робот не будет выполнять команды перемещения, если целевая точка попадает
-        // в заданную запретную зону.
+        //   X — X1 (min X), Y — X2 (max X), Z — Y1 (min Y)
+        //   A — Y2 (max Y), B — Z1 (min Z), C — Z2 (max Z)
         .params = {
-            {'X', PARAM_FLOAT, 0, 0.0},  // ignored, uses X1/X2
+            {'X', PARAM_FLOAT, 0, 0.0},
+            {'Y', PARAM_FLOAT, 0, 0.0},
+            {'Z', PARAM_FLOAT, 0, 0.0},
+            {'A', PARAM_FLOAT, 0, 0.0},
+            {'B', PARAM_FLOAT, 0, 0.0},
+            {'C', PARAM_FLOAT, 0, 0.0},
         },
-        .paramCount = 1,
+        .paramCount = 6,
         .handler = handleM410,
     },
     {

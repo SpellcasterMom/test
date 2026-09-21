@@ -74,32 +74,6 @@ private:
     void parseParams(GCodeCommand &cmd, String line, const CommandDef &def);
 
     /**
-     * extractParam — Извлечение числового параметра (float) из строки G-кода.
-     *
-     * Ищет заданную букву параметра в строке и извлекает числовое значение
-     * после неё. Если параметр не найден, возвращает значение по умолчанию.
-     *
-     * @param line — строка G-кода
-     * @param param — буква параметра (например, 'X')
-     * @param defaultVal — значение по умолчанию, если параметр не найден
-     * @return float — извлечённое или default-значение
-     */
-    float extractParam(String line, char param, float defaultVal);
-
-    /**
-     * extractIntParam — Извлечение целочисленного параметра из строки G-кода.
-     *
-     * Аналог extractParam(), но возвращает int. Используется для параметров
-     * типа L, S, R, которые обычно принимают целочисленные значения.
-     *
-     * @param line — строка G-кода
-     * @param param — буква параметра (например, 'L')
-     * @param defaultVal — значение по умолчанию, если параметр не найден
-     * @return int — извлечённое или default-значение
-     */
-    int extractIntParam(String line, char param, int defaultVal);
-
-    /**
      * setParamValue — Установка значения параметра в структуре GCodeCommand.
      *
      * Маппит букву параметра на поле структуры команды:
