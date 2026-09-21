@@ -79,6 +79,11 @@ void SafetyChecker::setLinkZMin(int link, float zMin) {
  */
 void SafetyChecker::setFingerLength(float len) {
     fingerLength = len;
+    fkSolver.setFingerLength(len);
+}
+
+void SafetyChecker::setDHParams(const float dh[6][4]) {
+    fkSolver.setDHParams(dh);
 }
 
 /**

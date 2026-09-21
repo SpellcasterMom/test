@@ -303,8 +303,10 @@ bool MotionInterpolator::interpolateAuto(const JointAngles &target, float feedra
         return true;
     }
 
-    // Если линейная не прошла — переключаемся на последовательную (безопасный путь)
-    moving = true;
+    // Если M112 сработал во время линейной — не перезапускаем движение
+    if (!moving) return false;
+
+    // Если линейная не прошла по безопасности — переключаемся на последовательную
     return interpolateSequential(target, feedrate);
 }
 

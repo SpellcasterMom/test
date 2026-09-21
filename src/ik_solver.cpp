@@ -753,6 +753,12 @@ int IKSolver::solveAll(const Pose &target, JointAngles solutions[4]) {
     if (solvePosition(target.position.x, target.position.y, target.position.z,
                       q1, q2, q3)) {
         q3 = -q3;  // инвертируем угол локтя: elbow down → elbow up
+        // Пересчитываем q2 для нового q3 (cos(-q3)=cos(q3), sin(-q3)=-sin(q3))
+        float r = sqrt(target.position.x * target.position.x + target.position.y * target.position.y) - a[0];
+        float s = target.position.z - d[0];
+        float L1 = a[1];
+        float L2 = a[2];
+        q2 = atan2(s, r) - atan2(L2 * sin(q3), L1 + L2 * cos(q3));
         // Пересчитываем ориентацию для новой конфигурации
         solveOrientation(target.orientation.x, target.orientation.y, target.orientation.z,
                          q1, q2, q3, q4, q5, q6);

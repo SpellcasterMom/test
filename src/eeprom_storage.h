@@ -111,7 +111,7 @@ public:
      * @param config — конфигурация манипуляции для сохранения
      * @param homeAngles — массив из 7 домашних углов сервоприводов
      */
-    void saveConfig(const ManipulatorConfig &config, const float homeAngles[7]);
+    void saveConfig(const ManipulatorConfig &config, const float homeAngles[7], InterpolationStrategy strategy);
 
     /**
      * loadConfig — Загрузка полной конфигурации + домашних углов из EEPROM.

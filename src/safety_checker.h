@@ -64,6 +64,13 @@ public:
     void setLinkZMin(int link, float zMin);
 
     /**
+     * @brief Установка DH-параметров для внутреннего FK-решателя.
+     * Необходим для корректного вычисления позиций звеньев при проверке безопасности.
+     * @param dh Массив 6×4 DH-параметров [a, alpha, d, theta_offset]
+     */
+    void setDHParams(const float dh[6][4]);
+
+    /**
      * @brief Установка длины пальца захватчика (виртуальное 7-е звено).
      * @param len Длина пальца в мм
      */

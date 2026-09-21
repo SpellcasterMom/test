@@ -65,7 +65,7 @@ void EEPROMStorage::begin() {
  * @param config — конфигурация манипуляции для сохранения
  * @param homeAngles — массив из 7 домашних углов сервоприводов
  */
-void EEPROMStorage::saveConfig(const ManipulatorConfig &config, const float homeAngles[7]) {
+void EEPROMStorage::saveConfig(const ManipulatorConfig &config, const float homeAngles[7], InterpolationStrategy strategy) {
     EEPROMData d;
     d.magic = EEPROM_MAGIC;
 
@@ -78,7 +78,7 @@ void EEPROMStorage::saveConfig(const ManipulatorConfig &config, const float home
     d.workspace = config.workspace;
     d.linkSafety = config.linkSafety;
     d.fingerLength = config.fingerLength;
-    d.strategy = INTERP_AUTO;
+    d.strategy = strategy;
 
     d.checksum = calculateChecksum(d);
     data = d;

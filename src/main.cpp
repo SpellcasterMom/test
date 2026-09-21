@@ -211,7 +211,7 @@ void handleG0(GCodeCommand &cmd) {
     cmd.determineMode();
 
     // Сброс ошибки при новой команде
-    xSemaphoreTake(displayMutex, pdMS_TO_TICKS(5));
+    xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
     sharedState.hasError = false;
     xSemaphoreGive(displayMutex);
 
@@ -221,7 +221,7 @@ void handleG0(GCodeCommand &cmd) {
         case GCodeCommand::IK_MODE: {
             // Обратная кинематика: позиция + ориентация → углы суставов
             if (!ikSolver.solve(cmd.pose, target)) {
-                xSemaphoreTake(displayMutex, pdMS_TO_TICKS(5));
+                xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
                 sharedState.hasError = true;
                 snprintf(sharedState.lastError, sizeof(sharedState.lastError), "IK not found");
                 xSemaphoreGive(displayMutex);
@@ -260,7 +260,7 @@ void handleG0(GCodeCommand &cmd) {
     // Проверка безопасности: запретные зоны, ограничения по длине/высоте
     if (safety.isEnabled()) {
         if (!safety.checkAllLinks(target.angles)) {
-            xSemaphoreTake(displayMutex, pdMS_TO_TICKS(5));
+            xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
             sharedState.hasError = true;
             snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Safety");
             xSemaphoreGive(displayMutex);
@@ -320,7 +320,7 @@ void handleG1(GCodeCommand &cmd) {
  */
 void handleG28(GCodeCommand &cmd) {
     // Сброс ошибки при новой команде
-    xSemaphoreTake(displayMutex, pdMS_TO_TICKS(5));
+    xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
     sharedState.hasError = false;
     xSemaphoreGive(displayMutex);
 
@@ -544,7 +544,7 @@ void handleM414(GCodeCommand &cmd) {
  */
 void handleM415(GCodeCommand &cmd) {
     safety.enable(false);
-    xSemaphoreTake(displayMutex, pdMS_TO_TICKS(5));
+    xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
     sharedState.safetyEnabled = false;
     xSemaphoreGive(displayMutex);
     Serial.println("OK: Safety disabled");
@@ -556,7 +556,7 @@ void handleM415(GCodeCommand &cmd) {
  */
 void handleM416(GCodeCommand &cmd) {
     safety.enable(true);
-    xSemaphoreTake(displayMutex, pdMS_TO_TICKS(5));
+    xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
     sharedState.safetyEnabled = true;
     xSemaphoreGive(displayMutex);
     Serial.println("OK: Safety enabled");
@@ -580,7 +580,7 @@ void handleM420(GCodeCommand &cmd) {
  */
 void handleM425(GCodeCommand &cmd) {
     safety.enable(false);
-    xSemaphoreTake(displayMutex, pdMS_TO_TICKS(5));
+    xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
     sharedState.safetyEnabled = false;
     xSemaphoreGive(displayMutex);
     Serial.println("OK: Safety disabled");
@@ -592,7 +592,7 @@ void handleM425(GCodeCommand &cmd) {
  */
 void handleM426(GCodeCommand &cmd) {
     safety.enable(true);
-    xSemaphoreTake(displayMutex, pdMS_TO_TICKS(5));
+    xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
     sharedState.safetyEnabled = true;
     xSemaphoreGive(displayMutex);
     Serial.println("OK: Safety enabled");
@@ -619,7 +619,7 @@ void handleM430(GCodeCommand &cmd) {
  * Сохраняется при выключении питания и загружается при включении.
  */
 void handleM500(GCodeCommand &cmd) {
-    storage.saveConfig(config, homeAngles.angles);
+    storage.saveConfig(config, homeAngles.angles, interpStrategy);
     Serial.println("OK: Saved to EEPROM");
 }
 
@@ -945,7 +945,7 @@ void setup() {
 void onInterpolationStep(const JointAngles &angles) {
     if (!displayMutex) return;
 
-    if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+    if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         for (int i = 0; i < 7; i++) {
             sharedState.servoAngles[i] = angles.angles[i];
         }

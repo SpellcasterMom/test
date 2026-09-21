@@ -80,7 +80,7 @@ struct ServoConfig {
     uint16_t minPWM;                      // минимальный PWM (мкс)
     uint16_t maxPWM;                      // максимальный PWM (мкс)
     uint8_t  maxAngularSpeed;             // максимальная скорость (градусы/с)
-    uint8_t  correctionFactor;            // корректировка (100 = 1.0 = без коррекции)
+    float    correctionFactor;            // корректировка (100.0 = без коррекции)
     int8_t   backlashCompensation;        // компенсация люфта (градусы)
     bool     isInverted;                  // инверсия направления вращения
     uint8_t  directionCorrection[2];      // корректировка [CW, CCW] (для будущего)
