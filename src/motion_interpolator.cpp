@@ -130,8 +130,34 @@ bool MotionInterpolator::interpolateLinear(const JointAngles &target, float feed
     // Если изменение меньше порога — движение не требуется
     if (maxDelta < MIN_STEP_DEG) return true;
 
-    // Расчет времени движения (мс) на основе feedrate (град/сек)
-    float timeMs = (maxDelta / feedrate) * 1000.0f;
+    // Расчёт времени движения для каждого сервопривода
+    // time_i = delta_i / maxAngularSpeed_i
+    float servoTime[7] = {0};
+    
+    for (int i = 0; i < 7; i++) {
+        float delta = fabs(target.angles[i] - currentAngles.angles[i]);
+        
+        if (servoCtrl && delta > 0) {
+            float maxSpeed = servoCtrl->getConfig(i).maxAngularSpeed;
+            if (maxSpeed > 0) {
+                servoTime[i] = delta / maxSpeed;  // секунды
+            }
+        }
+    }
+
+    // Находим максимальное время (самый медленный сервопривод)
+    float maxTime = 0;
+    for (int i = 0; i < 7; i++) {
+        if (servoTime[i] > maxTime) maxTime = servoTime[i];
+    }
+    
+    // Применяем feedrate как множитель (100% = норма, 50% = в 2 раза медленнее)
+    if (feedrate > 0 && feedrate != 100.0f) {
+        maxTime = maxTime * (100.0f / feedrate);
+    }
+    
+    // Пересчитываем в миллисекунды и количество шагов
+    float timeMs = maxTime * 1000.0f;
     int steps = (int)(timeMs / STEP_INTERVAL_MS);
     if (steps < 1) steps = 1;
 

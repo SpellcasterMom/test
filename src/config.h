@@ -75,13 +75,13 @@ const float DH_PARAMS[6][4] = {
 // - Инверсия направления вращения
 struct ServoConfig {
     uint8_t  id;                          // ID сервопривода (0-6)
-    int8_t   minAngle;                    // минимальный угол (градусы)
-    int8_t   maxAngle;                    // максимальный угол (градусы)
+    int16_t  minAngle;                    // минимальный угол (градусы)
+    int16_t  maxAngle;                    // максимальный угол (градусы)
     uint16_t minPWM;                      // минимальный PWM (мкс)
     uint16_t maxPWM;                      // максимальный PWM (мкс)
-    uint8_t  maxAngularSpeed;             // максимальная скорость (градусы/с)
+    uint16_t maxAngularSpeed;             // максимальная скорость (градусы/с)
     float    correctionFactor;            // корректировка (100.0 = без коррекции)
-    int8_t   backlashCompensation;        // компенсация люфта (градусы)
+    int16_t  backlashCompensation;        // компенсация люфта (градусы)
     bool     isInverted;                  // инверсия направления вращения
     uint8_t  directionCorrection[2];      // корректировка [CW, CCW] (для будущего)
 };

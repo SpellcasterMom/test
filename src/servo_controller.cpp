@@ -29,8 +29,19 @@
  */
 void ServoController::init() {
     pwm = Adafruit_PWMServoDriver(0x40);
-    pwm.begin();
-    pwm.setPWMFreq(50);  // 50 Гц — стандартная частота для сервоприводов
+    
+    // Проверяем, отвечает ли PCA9685 по I2C
+    Wire.beginTransmission(0x40);
+    uint8_t error = Wire.endTransmission();
+    
+    if (error == 0) {
+        pca9685Available = true;
+        pwm.begin();
+        pwm.setPWMFreq(50);  // 50 Гц — стандартная частота для сервоприводов
+    } else {
+        pca9685Available = false;
+        Serial.println("WARN: PCA9685 not found at 0x40, running in debug mode");
+    }
 
     // Копируем конфигурации из глобального массива DEFAULT_CONFIG
     for (int i = 0; i < 7; i++) {
@@ -131,11 +142,13 @@ void ServoController::setAngle(int servoId, float angle) {
     // Каналы 0–5 — сервоприводы 6DOF, канал 6 — захватчик.
     // setPWM(channel, on_tick, off_tick): импульс начинается в тике 0
     // и заканчивается в тике pulse. Если pulse = 0, импульс не генерируется.
-    if (servoId < 6) {
-        pwm.setPWM(servoId, 0, pulse);
-    } else {
-        // Захватчик (грипер) всегда подключён к каналу 6
-        pwm.setPWM(6, 0, pulse);
+    if (pca9685Available) {
+        if (servoId < 6) {
+            pwm.setPWM(servoId, 0, pulse);
+        } else {
+            // Захватчик (грипер) всегда подключён к каналу 6
+            pwm.setPWM(6, 0, pulse);
+        }
     }
 
     // Сохраняем исходный угол (до коррекции и инверсии)
@@ -163,6 +176,10 @@ JointAngles ServoController::getCurrentAngles() {
     return currentAngles;
 }
 
+const ServoConfig& ServoController::getConfig(int servoId) const {
+    return configs[servoId];
+}
+
 /**
  * Включение сервоприводов.
  * После вызова все последующие setAngle() будут выдавать ШИМ-сигнал.
@@ -183,8 +200,10 @@ void ServoController::enable() {
 void ServoController::disable() {
     enabled = false;
     // Отключаем PWM на всех каналах — серво переходят в состояние покоя
-    for (int i = 0; i < 7; i++) {
-        pwm.setPWM(i, 0, 0);
+    if (pca9685Available) {
+        for (int i = 0; i < 7; i++) {
+            pwm.setPWM(i, 0, 0);
+        }
     }
 }
 

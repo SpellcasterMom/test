@@ -872,6 +872,20 @@ void setup() {
     Serial.begin(115200);
     delay(1000);
 
+    // === Инициализация дисплея ПЕРЕД I2C/PCA9685 ===
+    // Если I2C зависнет — дисплей уже работает и покажет статус
+    displayInit();
+    
+    // Вывод "6DOF" на экран (большие буквы)
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextSize(3);  // Крупный шрифт
+    tft.setCursor(40, 80);
+    tft.println("  6DOF");
+    tft.setTextSize(1);  // Возвращаем обычный размер
+    tft.setCursor(20, 120);
+    tft.setTextColor(TFT_CYAN, TFT_BLACK);
+    tft.println("Initializing...");
+
     Serial.println("=== 6-DOF Robot Arm Controller ===");
     Serial.println("ESP32 @ 240 MHz, PCA9685, 7 servos");
 
