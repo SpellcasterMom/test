@@ -34,6 +34,7 @@ void handleM413(GCodeCommand &cmd);
 void handleM414(GCodeCommand &cmd);
 void handleM415(GCodeCommand &cmd);
 void handleM416(GCodeCommand &cmd);
+void handleM417(GCodeCommand &cmd);
 
 void handleM420(GCodeCommand &cmd);
 void handleM425(GCodeCommand &cmd);
@@ -323,6 +324,15 @@ const CommandDef COMMANDS[] = {
         .params = {},
         .paramCount = 0,
         .handler = handleM416,
+    },
+    {
+        .name = "M417",
+        .description = "List forbidden zones: M417",
+        // Выводит количество и параметры всех запретных зон.
+        // Используется для проверки текущих запретных зон.
+        .params = {},
+        .paramCount = 0,
+        .handler = handleM417,
     },
 
     // ================================================================

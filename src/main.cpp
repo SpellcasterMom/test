@@ -241,7 +241,11 @@ void handleG0(GCodeCommand &cmd) {
     switch (cmd.mode) {
         case GCodeCommand::IK_MODE: {
             // Обратная кинематика: позиция + ориентация → углы суставов
-            if (!ikSolver.solve(cmd.pose, target)) {
+            // Ищем безопасное решение среди всех вариантов (elbow up/down)
+            JointAngles solutions[4];
+            int solCount = ikSolver.solveAll(cmd.pose, solutions);
+            
+            if (solCount == 0) {
                 xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
                 sharedState.hasError = true;
                 snprintf(sharedState.lastError, sizeof(sharedState.lastError), "IK not found");
@@ -249,9 +253,29 @@ void handleG0(GCodeCommand &cmd) {
                 Serial.println("ERROR: IK solution not found");
                 return;
             }
-            // Если задан захват — устанавливаем угол 7-го сервопривода
-            if (cmd.hasGripper) {
-                target.angles[6] = cmd.pose.gripper;
+            
+            // Выбираем первое безопасное решение
+            bool foundSafe = false;
+            for (int i = 0; i < solCount; i++) {
+                target = solutions[i];
+                // Устанавливаем захват
+                if (cmd.hasGripper) {
+                    target.angles[6] = cmd.pose.gripper;
+                }
+                // Проверяем безопасность
+                if (!safety.isEnabled() || safety.checkAllLinks(target.angles)) {
+                    foundSafe = true;
+                    break;
+                }
+            }
+            
+            if (!foundSafe) {
+                xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
+                sharedState.hasError = true;
+                snprintf(sharedState.lastError, sizeof(sharedState.lastError), "No safe IK solution");
+                xSemaphoreGive(displayMutex);
+                Serial.println("ERROR: No safe IK solution (all violate safety)");
+                return;
             }
             break;
         }
@@ -584,6 +608,25 @@ void handleM416(GCodeCommand &cmd) {
 }
 
 /**
+ * M417 — вывод списка запретных зон.
+ * Выводит количество и параметры всех запретных зон.
+ */
+void handleM417(GCodeCommand &cmd) {
+    int count = safety.getZoneCount();
+    Serial.println("OK: Forbidden zones count = " + String(count));
+    for (int i = 0; i < count; i++) {
+        float x1, x2, y1, y2, z1, z2;
+        bool active;
+        if (safety.getForbiddenZone(i, x1, x2, y1, y2, z1, z2, active)) {
+            Serial.println("Zone[" + String(i) + "]: X[" + String(x1, 0) + "-" + String(x2, 0) +
+                           "] Y[" + String(y1, 0) + "-" + String(y2, 0) +
+                           "] Z[" + String(z1, 0) + "-" + String(z2, 0) +
+                           "] active=" + String(active ? "true" : "false"));
+        }
+    }
+}
+
+/**
  * M420 — установка минимальной высоты Z для конкретного звена (link).
  * Параметр L задаёт номер звена (по умолчанию 0 = база).
  * Параметр Z задаёт минимальную высоту.
@@ -703,6 +746,7 @@ void handleHelp(GCodeCommand &cmd) {
     Serial.println("M414 L=50                     - Set gripper finger length (mm)");
     Serial.println("M415 / M425                   - Disable safety");
     Serial.println("M416 / M426                   - Enable safety");
+    Serial.println("M417                          - List forbidden zones");
     Serial.println("M420 L1 Z=30                  - Set link Z min");
     Serial.println("M430 S=3                      - Strategy (0=lin,1=seq,2=grp,3=auto)");
     Serial.println("M500                          - Save config to EEPROM");

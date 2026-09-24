@@ -137,6 +137,23 @@ public:
      */
     String getLastError() const;
 
+    /**
+     * @brief Получение количества активных запретных зон.
+     * @return Количество активных запретных зон (0-10)
+     */
+    int getZoneCount() const;
+
+    /**
+     * @brief Получение параметров запретной зоны по индексу.
+     * @param index Индекс зоны (0-9)
+     * @param x1, x2 Границы по X
+     * @param y1, y2 Границы по Y
+     * @param z1, z2 Границы по Z
+     * @param active Активна ли зона
+     * @return true если зона существует
+     */
+    bool getForbiddenZone(int index, float &x1, float &x2, float &y1, float &y2, float &z1, float &z2, bool &active) const;
+
 private:
     /** Максимальное количество звеньев: 6 основных + 1 виртуальное (палец захватчика) */
     static const int MAX_LINKS = 7;

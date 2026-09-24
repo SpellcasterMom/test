@@ -129,6 +129,22 @@ String SafetyChecker::getLastError() const {
     return lastError;
 }
 
+int SafetyChecker::getZoneCount() const {
+    return zoneCount;
+}
+
+bool SafetyChecker::getForbiddenZone(int index, float &x1, float &x2, float &y1, float &y2, float &z1, float &z2, bool &active) const {
+    if (index < 0 || index >= MAX_FORBIDDEN_ZONES) return false;
+    x1 = zones[index].xMin;
+    x2 = zones[index].xMax;
+    y1 = zones[index].yMin;
+    y2 = zones[index].yMax;
+    z1 = zones[index].zMin;
+    z2 = zones[index].zMax;
+    active = zones[index].active;
+    return true;
+}
+
 /**
  * @brief Проверка попадания точки в рабочую область.
  * Рабочая область определяется прямоугольным параллелепипедом
