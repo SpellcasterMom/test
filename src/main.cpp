@@ -801,6 +801,10 @@ void core0Task(void *pvParameters) {
             // Конец строки: парсим и выполняем команду
             if (c == '\n' || c == '\r') {
                 if (buffer.length() > 0) {
+                    // Эхо полученной команды в порт
+                    Serial.print("> ");
+                    Serial.println(buffer);
+
                     // Парсинг G-code → структура GCodeCommand
                     GCodeCommand cmd = parser.parse(buffer);
 
@@ -1003,12 +1007,10 @@ void onInterpolationStep(const JointAngles &angles) {
 #define COLOR_FIELD_LABEL     TFT_WHITE
 #define COLOR_TCP             TFT_GREEN
 #define COLOR_JOINT           TFT_YELLOW
-#define COLOR_GRIPPER         0xFDA0   // оранжевый
+#define COLOR_GRIPPER         0xFDA0  // оранжевый
 #define COLOR_READY           TFT_GREEN
 #define COLOR_MOVING          TFT_YELLOW
 #define COLOR_ERROR           TFT_RED
-#define COLOR_PROGRESS_BG     0x2104   // тёмно-серый
-#define COLOR_PROGRESS_FG     TFT_GREEN
 
 // Шрифт: Font 2 (16px высота строки)
 #define FONT_HEIGHT  16
@@ -1071,27 +1073,6 @@ static void drawField(int y, const char *label, float value, float &lastVal,
     tft.setTextColor(color, TFT_BLACK);
     tft.setCursor(236 - textW, y);
     tft.print(buf);
-}
-
-/**
- * drawProgressBar() — рисует горизонтальный прогресс-бар.
- */
-static void drawProgressBar(int y, float percent) {
-    int barW = 232;
-    int barH = 10;
-    int x = 4;
-    int fillW = (int)(barW * percent / 100.0f);
-    if (fillW < 0) fillW = 0;
-    if (fillW > barW) fillW = barW;
-
-    tft.drawRect(x, y, barW, barH, TFT_WHITE);
-    // Фон (пустая часть)
-    tft.fillRect(x + 1, y + 1, barW - 2, barH - 2, COLOR_PROGRESS_BG);
-    // Заполненная часть
-    if (fillW > 2) {
-        uint16_t barColor = (percent > 80.0f) ? COLOR_ERROR : COLOR_PROGRESS_FG;
-        tft.fillRect(x + 1, y + 1, fillW - 2, barH - 2, barColor);
-    }
 }
 
 // ====================================================================
@@ -1162,7 +1143,6 @@ void displayUpdate() {
     // === Gripper Zone ===
     drawField(ZONE_GRIPPER_Y + HEADER_H, " Position:",
               state.gripperPercent, lastGrip, COLOR_GRIPPER, "%");
-    drawProgressBar(ZONE_GRIPPER_Y + HEADER_H + 14, state.gripperPercent);
 
     // === Status Bar ===
     moving = state.isMoving;
