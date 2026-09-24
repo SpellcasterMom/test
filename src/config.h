@@ -102,7 +102,7 @@ struct WorkspaceLimits {
 const WorkspaceLimits WORKSPACE = {
     .xMin = -250, .xMax = 250,
     .yMin = -250, .yMax = 250,
-    .zMin = 20,   .zMax = 400,    // Z min = 2 см от стола
+    .zMin = 0,     .zMax = 400,    // Z min = 0 (уровень стола)
 };
 
 // ====================================================================
