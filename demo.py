@@ -5,14 +5,17 @@
 Отправляет последовательность команд из шапки main.cpp по Serial,
 ждёт ответ OK/ERROR после каждой команды, логирует прогресс.
 
-ESP32 НЕ перезагружается при подключении — скрипт просто открывает
-порт и начинает работу (полезно, если плата уже в нужном состоянии).
+ESP32 НЕ перезагружается принудительно при подключении (DTR/RTS снимаются
+до open). После открытия порта скрипт ждёт 8 секунд — чтобы ESP32 успел
+пройти setup() (там delay(5000) + инициализация I2C/EEPROM) и начал
+слушать Serial в core0Task.
 
 Использование:
-    python demo.py                        # порт по умолчанию
+    python demo.py                        # порт по умолчанию, пауза 8 сек
     python demo.py /dev/ttyUSB0           # Linux
     python demo.py COM11                  # Windows
     python demo.py /dev/tty.usbserial-*   # macOS
+    python demo.py /dev/ttyUSB0 115200 12 # порт, скорость, пауза (сек)
 
 Требования:
     pip install pyserial
@@ -26,26 +29,32 @@ import serial.tools.list_ports
 
 # ===== Настройки =====
 DEFAULT_BAUD = 115200
-TIMEOUT_SEC = 30        # максимум ожидания ответа на команду
-INTER_CMD_DELAY = 0.2   # пауза между командами (сек)
+DEFAULT_STARTUP_DELAY = 15.0   # пауза после open, чтобы ESP32 прошёл setup()
+TIMEOUT_SEC = 30              # максимум ожидания ответа на команду
+INTER_CMD_DELAY = 0.2         # пауза между командами (сек)
 
 
 # ===== Демонстрационная последовательность (из шапки main.cpp) =====
+#   G0 P7=... заменено на M104 P7=... — прямое управление захватом
+#   без пересчёта IK (иначе safety ругается на reach=415 > MAX=395).
+#   M412 R=420 в начале — поднимаем maxReach, чтобы IK-точки тоже влезали.
+
 DEMO_COMMANDS = [
-    ("G28",                                 "Home all axes"),
-    ("G0 X200 Y50 Z250 A10 B-20 C5 F300",   "Точка 1"),
-    ("G0 X180 Y-80 Z150 A-15 B10 C-20 F300","Точка 2"),
-    ("G0 X-50 Y-150 Z200 A25 B0 C30 F300",  "Точка 3"),
+    ("M412 R=420",                           "Set max reach 420mm"),
+    ("G28",                                  "Home all axes"),
+    ("G0 X200 Y50 Z250 A10 B-20 C5 F300",    "Точка 1"),
+    ("G0 X180 Y-80 Z150 A-15 B10 C-20 F300", "Точка 2"),
+    ("G0 X-50 Y-150 Z200 A25 B0 C30 F300",   "Точка 3"),
     ("G0 X-100 Y120 Z300 A-10 B-30 C-15 F300","Точка 4"),
-    ("G0 X100 Y0 Z100 A0 B20 C0 F250",      "Точка 5"),
-    ("G0 P7=20 F200",                       "Захват 20%"),
-    ("G0 X50 Y-200 Z280 A30 B-25 C40 F300", "Точка 6"),
-    ("G0 P7=90 F200",                       "Захват 90%"),
-    ("G0 X150 Y180 Z180 A-20 B15 C-35 F300","Точка 7"),
-    ("G0 X250 Y0 Z200 A0 B-40 C0 F250",     "Точка 8"),
-    ("G28",                                 "Home again"),
-    ("M114",                                "Report position"),
-    ("M105",                                "Report servo angles"),
+    ("G0 X100 Y0 Z100 A0 B20 C0 F250",       "Точка 5"),
+    ("M104 P7=20",                           "Захват 20%"),
+    ("G0 X50 Y-200 Z280 A30 B-25 C40 F300",  "Точка 6"),
+    ("M104 P7=90",                           "Захват 90%"),
+    ("G0 X150 Y180 Z180 A-20 B15 C-35 F300", "Точка 7"),
+    ("G0 X250 Y0 Z200 A0 B-40 C0 F250",      "Точка 8"),
+    ("G28",                                  "Home again"),
+    ("M114",                                 "Report position"),
+    ("M105",                                 "Report servo angles"),
 ]
 
 
@@ -76,15 +85,15 @@ def find_port():
     return candidates[0]
 
 
-def open_serial(port, baud=DEFAULT_BAUD):
+def open_serial(port, baud=DEFAULT_BAUD, startup_delay=DEFAULT_STARTUP_DELAY):
     """
-    Открывает Serial без сброса ESP32.
-    DTR и RTS принудительно снимаются ДО открытия порта, чтобы
-    не спровоцировать авто-reset через схему на транзисторах.
+    Открывает Serial без принудительного сброса ESP32.
+    DTR/RTS снимаются ДО open(), чтобы не дёрнуть схему авто-сброса.
+    После открытия ждёт startup_delay секунд — чтобы ESP32 завершил setup()
+    и был готов принимать команды (в setup() есть delay(5000)).
     """
     print(f"Открываю {port} @ {baud} (без сброса ESP32)...")
 
-    # Создаём объект, но пока не открываем
     ser = serial.Serial()
     ser.port = port
     ser.baudrate = baud
@@ -93,22 +102,33 @@ def open_serial(port, baud=DEFAULT_BAUD):
     ser.stopbits = serial.STOPBITS_ONE
     ser.timeout = 0.1
 
-    # Важно: снимаем DTR/RTS ДО open(), чтобы не дёрнуть ноги
-    # на переходе открытия порта (это триггерит авто-reset на многих платах)
+    # Снимаем DTR/RTS ДО open — не дёргаем авто-reset
     ser.dtr = False
     ser.rts = False
 
-    # Открываем
     ser.open()
 
-    # Ещё раз явно снимаем после open — на случай, если драйвер их поднял
-    ser.setDTR(False)
-    ser.setRTS(False)
+    # Ещё раз после open — на случай, если драйвер поднял
+    try:
+        ser.setDTR(False)
+        ser.setRTS(False)
+    except Exception:
+        pass
 
-    # Короткая пауза, чтобы входной буфер устаканился
-    time.sleep(0.1)
+    # Сбрасываем буфер — там может быть мусор от ESP32
+    ser.reset_input_buffer()
 
-    print("Порт открыт.\n")
+    # Пауза, чтобы ESP32 завершил setup() и был готов принимать команды
+    print(f"Порт открыт. Ждём {startup_delay:.0f} сек (setup ESP32)...")
+    for remaining in range(int(startup_delay), 0, -1):
+        print(f"  {remaining}...", end="", flush=True)
+        time.sleep(1.0)
+    print(" готово.\n")
+
+    # Очищаем буфер ещё раз — на случай, если во время паузы
+    # ESP32 что-то печатал (boot-log, "Ready.", и т.д.)
+    ser.reset_input_buffer()
+
     return ser
 
 
@@ -172,18 +192,15 @@ def print_banner():
 
 
 def main():
-    # Порт из argv или автоопределение
-    if len(sys.argv) > 1:
-        port = sys.argv[1]
-    else:
-        port = find_port()
-
+    # Аргументы: port [baud] [startup_delay]
+    port = sys.argv[1] if len(sys.argv) > 1 else find_port()
     baud = int(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_BAUD
+    startup_delay = float(sys.argv[3]) if len(sys.argv) > 3 else DEFAULT_STARTUP_DELAY
 
     print_banner()
 
     try:
-        ser = open_serial(port, baud)
+        ser = open_serial(port, baud, startup_delay=startup_delay)
     except serial.SerialException as e:
         print(f"Ошибка открытия порта: {e}")
         sys.exit(1)

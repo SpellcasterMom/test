@@ -1141,7 +1141,7 @@ void displayInit() {
     tft.setCursor(20, 120);
     tft.setTextColor(ST77XX_CYAN, ST77XX_BLACK);
     tft.println(" Initializing...");
-    delay(5000);
+    delay(2000);
     tft.fillScreen(ST77XX_BLACK);
 
     tft.setTextSize(2);        // Размер шрифта 2 (16px)
