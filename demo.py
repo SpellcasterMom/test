@@ -5,6 +5,9 @@
 Отправляет последовательность команд из шапки main.cpp по Serial,
 ждёт ответ OK/ERROR после каждой команды, логирует прогресс.
 
+ESP32 НЕ перезагружается при подключении — скрипт просто открывает
+порт и начинает работу (полезно, если плата уже в нужном состоянии).
+
 Использование:
     python demo.py                        # порт по умолчанию
     python demo.py /dev/ttyUSB0           # Linux
@@ -74,36 +77,38 @@ def find_port():
 
 
 def open_serial(port, baud=DEFAULT_BAUD):
-    """Открывает Serial с DTR/RTS сбросом (чтобы ESP32 перезагрузился)."""
-    print(f"Открываю {port} @ {baud}...")
-    ser = serial.Serial(
-        port=port,
-        baudrate=baud,
-        bytesize=serial.EIGHTBITS,
-        parity=serial.PARITY_NONE,
-        stopbits=serial.STOPBITS_ONE,
-        timeout=0.1,
-    )
+    """
+    Открывает Serial без сброса ESP32.
+    DTR и RTS принудительно снимаются ДО открытия порта, чтобы
+    не спровоцировать авто-reset через схему на транзисторах.
+    """
+    print(f"Открываю {port} @ {baud} (без сброса ESP32)...")
 
-    # DTR/RTS сброс ESP32 (аналог нажатия EN)
+    # Создаём объект, но пока не открываем
+    ser = serial.Serial()
+    ser.port = port
+    ser.baudrate = baud
+    ser.bytesize = serial.EIGHTBITS
+    ser.parity = serial.PARITY_NONE
+    ser.stopbits = serial.STOPBITS_ONE
+    ser.timeout = 0.1
+
+    # Важно: снимаем DTR/RTS ДО open(), чтобы не дёрнуть ноги
+    # на переходе открытия порта (это триггерит авто-reset на многих платах)
+    ser.dtr = False
+    ser.rts = False
+
+    # Открываем
+    ser.open()
+
+    # Ещё раз явно снимаем после open — на случай, если драйвер их поднял
     ser.setDTR(False)
-    ser.setRTS(True)
-    time.sleep(0.1)
     ser.setRTS(False)
+
+    # Короткая пауза, чтобы входной буфер устаканился
     time.sleep(0.1)
 
-    # Ждём загрузки ESP32 (обычно 1-3 сек)
-    print("Ждём загрузки ESP32...", end="", flush=True)
-    start = time.time()
-    while time.time() - start < 5.0:
-        if ser.in_waiting:
-            line = ser.readline().decode(errors="ignore").strip()
-            if line:
-                print(f"\n[ESP32] {line}")
-                if "Ready" in line:
-                    break
-        time.sleep(0.05)
-    print(" готово.\n")
+    print("Порт открыт.\n")
     return ser
 
 
