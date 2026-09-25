@@ -52,22 +52,36 @@
  *     прямое управление сервоприводами, обновление sharedState.
  *
  *   Core 1 — Display:
- *     Чтение sharedState (каждые200мс), обновление ST7789 дисплея.
- *     Отображает: TCP позицию, углы сервоприводов, захват, статус.
+ *     Чтение sharedState (каждые 200 мс), обновление ST7789 дисплея.
  *
- * Доступ к общим данным (sharedState, currentAngles) защищён мьютексами,
- * что исключает гонки между задачами Core0 и Core1.
+ * Доступ к общим данным (sharedState, currentAngles) защищён мьютексами.
  *
- * Протокол общения: отправить G/M-команду → дождаться ответа OK/ERROR.
- * Поддерживает: прямое управление сервоприводами, ИК-решение, смешанный режим,
- * компенсацию люфта, проверку безопасности (запретные зоны, ограничения
- * по длине/высоте), сохранение/загрузку конфигурации из EEPROM.
+ * =====================================================================
+ * Компоновка дисплея (ST7789 240×240):
+ * =====================================================================
+ *
+ *   ┌─────────────────────────────────────┐  y=0
+ *   │ TCP POS.                            │  заголовок
+ *   ├─────────────────────────────────────┤  y=16
+ *   │ X:   415mm                          │
+ *   │ Y:     0mm                          │
+ *   │ Z:   160mm                          │
+ *   ├─────────────────────────────────────┤  y=72
+ *   │ JOINTS                              │  заголовок
+ *   ├─────────────────────────────────────┤  y=88
+ *   │ P1:    0     P4:    0               │
+ *   │ P2:  -40     P5:    0               │
+ *   │ P3:    0     P6:    0               │
+ *   │ Gripper:   50%                      │
+ *   ├─────────────────────────────────────┤  y=176
+ *   │ READY                          123  │  статус + счётчик
+ *   │ Safe:ON     PCA:OFF            ABS  │  safety + PCA + режим
+ *   │ G:G28                               │  последняя команда
+ *   └─────────────────────────────────────┘  y=240
  *
  * =====================================================================
  * ДЕМОНСТРАЦИЯ: Endpoint Control — 8 позиций
  * =====================================================================
- * Отправляйте команды пошагово: вставляйте одну строку,
- * ждите ответ OK, затем следующую.
  *
  * G28
  * G0 X200 Y50 Z250 A10 B-20 C5 F300
@@ -112,8 +126,6 @@
 #define TFT_RST   4
 
 // ===== Глобальные объекты =====
-// Все объекты создаются глобально для доступа из задач FreeRTOS
-// и обработчиков команд. Жизненный цикл = всё время работы контроллера.
 
 // Парсер G-code: преобразует текстовую команду в структуру GCodeCommand
 GCodeParser          parser;
@@ -132,8 +144,6 @@ ServoController      servoCtrl;
 
 // Интерполятор движений: плавно перемещает сервоприводы из текущего
 // положения в целевое с заданной подачей (feedrate).
-// Поддерживает несколько стратегий: линейная, последовательная,
-// групповая и автоматический выбор.
 MotionInterpolator   interpolator;
 
 // Компенсатор люфта: хранит поправки на люфт каждого сервопривода
@@ -150,41 +160,18 @@ SafetyChecker        safety;
 GripperController    gripper;
 
 // Хранилище EEPROM: сохранение и загрузка конфигурации
-// (углы home, параметры сервоприводов и т.д.)
 EEPROMStorage        storage;
 
 // ===== Глобальное состояние =====
-// Текущая конфигурация манипулятора (углы сервоприводов, ограничения,
-// длина пальцев и т.д.). Загружается из EEPROM или берётся из DEFAULT_CONFIG.
 ManipulatorConfig    config = DEFAULT_CONFIG;
-
-// Углы «домашней» позиции (home). Используются при вызове G28.
-// Могут быть сохранены в EEPROM через M500, загружены через M501.
 JointAngles          homeAngles;
-
-// Текущие углы всех 7 сервоприводов (operational state).
-// Защищены мьютексом angleMutex, так как читаются из разных задач.
 JointAngles          currentAngles;
-
-// Режим координат: true = абсолютный (G90), false = относительный (G91).
-// Влияет на обработку целевых координат в G0/G1.
 bool                 absoluteMode = true;
-
-// Стратегия интерполяции движения.
-// INTERP_AUTO = автоматический выбор на основе текущей задачи.
-// INTERP_LINEAR = линейная, INTERP_SEQUENTIAL = последовательная,
-// INTERP_GROUPED = групповая.
 InterpolationStrategy interpStrategy = INTERP_AUTO;
 
-// ===== FreeRTOS: задачи и мьютекс =====
-// Дескрипторы задач: используются для управления задачами (создание,
-// удаление, приостановка) из основного потока.
+// ===== FreeRTOS: задачи и мьютексы =====
 TaskHandle_t core0TaskHandle = NULL;
 TaskHandle_t core1TaskHandle = NULL;
-
-// Мьютекс (mutual exclusion) для защиты доступа к currentAngles.
-// Захватывается через xSemaphoreTake / освобождается через xSemaphoreGive.
-// portMAX_DELAY означает бесконечное ожидание, если мьютекс занят.
 SemaphoreHandle_t angleMutex = NULL;
 
 // ===== Дисплей ST7789 =====
@@ -192,35 +179,31 @@ SemaphoreHandle_t angleMutex = NULL;
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
 
 // ===== Структура общего состояния для дисплея =====
-// Заполняется Core0 (callback интерполятора + обработчики команд)
-// Читается Core1 (задача обновления дисплея).
-// Защищена мьютексом displayMutex.
 struct SharedState {
     Vec3        tcpPosition;      // Текущая позиция TCP (из FK)
     float       servoAngles[7];   // Углы 7 сервоприводов (градусы)
     float       gripperPercent;   // Процент открытия захвата (0-100%)
     bool        isMoving;         // Флаг движения
     bool        safetyEnabled;    // Состояние безопасности
-    bool        pcaReady;         // PCA9685 найден на I2C и инициализирован
+    bool        pcaReady;         // PCA9685 найден на I2C
     bool        hasError;         // Есть ошибка
     char        lastError[64];    // Текст последней ошибки
+    char        lastCommand[24];  // Последняя полученная команда
     uint32_t    commandCount;     // Счётчик выполненных команд
 };
 
-SharedState    sharedState;       // Общее состояние (заполняется Core0)
-SemaphoreHandle_t displayMutex = NULL;  // Мьютекс для SharedState
+SharedState    sharedState;
+SemaphoreHandle_t displayMutex = NULL;
 
 // ===== Предварительные объявления функций =====
-void core0Task(void *pvParameters);  // Задача Core 0: Serial + движение
-void core1Task(void *pvParameters);  // Задача Core 1: дисплей / фоновые задачи
-void printPosition();                // Вывод текущей позиции (FK) в Serial
-void printServoAngles();             // Вывод текущих углов сервоприводов в Serial
-void printStatus();                  // Вывод полного статуса манипулятора
-
-// ===== Дисплей: функции отрисовки =====
-void displayInit();                  // Инициализация ST7789 дисплея
-void displayUpdate();                // Обновление данных на экране (вызывается Core1)
-void onInterpolationStep(const JointAngles &angles);  // Callback интерполятора
+void core0Task(void *pvParameters);
+void core1Task(void *pvParameters);
+void printPosition();
+void printServoAngles();
+void printStatus();
+void displayInit();
+void displayUpdate();
+void onInterpolationStep(const JointAngles &angles);
 
 // ====================================================================
 // Обработчики G-code команд
@@ -228,18 +211,8 @@ void onInterpolationStep(const JointAngles &angles);  // Callback интерпо
 
 /**
  * G0 — перемещение (быстрое).
- * Поддерживает три режима:
- *   IK_MODE       — задаётся позиция (X, Y, Z) и ориентация (A, B, C),
- *                    вычисляются углы через обратную кинематику.
- *   DIRECT_MODE   — задаются углы сервоприводов (P1..P7) напрямую.
- *   MIXED_MODE    — комбинация: IK + ручное перекрытие отдельных сервоприводов.
- *
- * После вычисления целевых углов выполняется проверка безопасности.
- * Если проверка пройдена — запускается интерполяция движения.
- * Мьютекс angleMutex захватывается при обновлении currentAngles.
  */
 void handleG0(GCodeCommand &cmd) {
-    // Определяет режим работы команды (IK / Direct / Mixed)
     cmd.determineMode();
 
     // Сброс ошибки при новой команде
@@ -269,11 +242,9 @@ void handleG0(GCodeCommand &cmd) {
             bool foundSafe = false;
             for (int i = 0; i < solCount; i++) {
                 target = solutions[i];
-                // Устанавливаем захват
                 if (cmd.hasGripper) {
                     target.angles[6] = cmd.pose.gripper;
                 }
-                // Проверяем безопасность
                 if (!safety.isEnabled() || safety.checkAllLinks(target.angles)) {
                     foundSafe = true;
                     break;
@@ -283,27 +254,23 @@ void handleG0(GCodeCommand &cmd) {
             if (!foundSafe) {
                 xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
                 sharedState.hasError = true;
-                snprintf(sharedState.lastError, sizeof(sharedState.lastError), "No safe IK solution");
+                snprintf(sharedState.lastError, sizeof(sharedState.lastError), "No safe IK");
                 xSemaphoreGive(displayMutex);
-                Serial.println("ERROR: No safe IK solution (all violate safety)");
+                Serial.println("ERROR: No safe IK solution");
                 return;
             }
             break;
         }
         case GCodeCommand::DIRECT_MODE: {
-            // Прямое управление: целевые углы заданы пользователем
             target = cmd.servoAngles;
             break;
         }
         case GCodeCommand::MIXED_MODE: {
-            // Смешанный режим: сначала IK, затем перекрытие отдельных сервоприводов
             if (cmd.hasPosition || cmd.hasOrientation) {
                 ikSolver.solve(cmd.pose, target);
             } else {
-                // Если позиция/ориентация не заданы — берём текущие углы
                 target = currentAngles;
             }
-            // Перекрытие сервоприводов, для которых заданы P-параметры
             for (int i = 0; i < 7; i++) {
                 if (cmd.servoOverride[i]) {
                     target.angles[i] = cmd.servoAngles.angles[i];
@@ -313,7 +280,7 @@ void handleG0(GCodeCommand &cmd) {
         }
     }
 
-    // Проверка безопасности: запретные зоны, ограничения по длине/высоте
+    // Проверка безопасности
     if (safety.isEnabled()) {
         if (!safety.checkAllLinks(target.angles)) {
             xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
@@ -326,15 +293,12 @@ void handleG0(GCodeCommand &cmd) {
         }
     }
 
-    // Запуск движения: интерполятор плавно перемещает сервоприводы
     float feedrate = cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE;
     if (interpolator.moveTo(target, feedrate)) {
-        // Защита мьютексом: обновляем currentAngles
         xSemaphoreTake(angleMutex, portMAX_DELAY);
         currentAngles = target;
         xSemaphoreGive(angleMutex);
 
-        // Обновление SharedState для дисплея
         xSemaphoreTake(displayMutex, portMAX_DELAY);
         for (int i = 0; i < 7; i++) {
             sharedState.servoAngles[i] = target.angles[i];
@@ -360,22 +324,15 @@ void handleG0(GCodeCommand &cmd) {
 
 /**
  * G1 — перемещение с подачей (аналогично G0).
- * Фактически вызывает handleG0, так как feedrate уже обрабатывается
- * внутри handleG0 на основе cmd.hasFeedrate / cmd.feedrate.
  */
 void handleG1(GCodeCommand &cmd) {
-    handleG0(cmd);  // Same as G0 but with feedrate
+    handleG0(cmd);
 }
 
 /**
  * G28 — перемещение в домашнюю позицию (home).
- * Если задан параметр H1 (cmd.hasParam['H' - 'A'] == 1 и значение == 1),
- * выполняется компактная складка (park): плечо вниз, локоть согнут,
- * запястье вертикально, захват закрыт.
- * Иначе — перемещение в сохранённую домашнюю позицию (homeAngles).
  */
 void handleG28(GCodeCommand &cmd) {
-    // Сброс ошибки при новой команде
     xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
     sharedState.hasError = false;
     xSemaphoreGive(displayMutex);
@@ -384,29 +341,18 @@ void handleG28(GCodeCommand &cmd) {
     bool park = cmd.hasParam['H' - 'A'] && (int)cmd.params['H' - 'A'] == 1;
 
     if (park) {
-        // Компактная складка (park position):
-        //   P1=0   — база по центру
-        //   P2=-60 — плечо вниз
-        //   P3=-90 — локоть сильно согнут
-        //   P4=0   — запястье (pitch) нейтрально
-        //   P5=0   — запястье (roll) нейтрально
-        //   P6=0   — запястье (yaw) нейтрально
-        //   P7=0   — захват закрыт
         target.setAll(0, -60, -90, 0, 0, 0, 0);
     } else {
-        // Перемещение в сохранённую домашнюю позицию
         for (int i = 0; i < 7; i++) {
             target.angles[i] = homeAngles.angles[i];
         }
     }
 
-    // Движение с фиксированной подачей 300 мм/с
     if (interpolator.moveTo(target, 300.0f)) {
         xSemaphoreTake(angleMutex, portMAX_DELAY);
         currentAngles = target;
         xSemaphoreGive(angleMutex);
 
-        // Обновление SharedState для дисплея
         xSemaphoreTake(displayMutex, portMAX_DELAY);
         for (int i = 0; i < 7; i++) {
             sharedState.servoAngles[i] = target.angles[i];
@@ -431,8 +377,6 @@ void handleG28(GCodeCommand &cmd) {
 
 /**
  * G90 — абсолютный режим координат.
- * Все последующие координаты в G0/G1 интерпретируются как абсолютные
- * (относительно начала координат манипулятора).
  */
 void handleG90(GCodeCommand &cmd) {
     absoluteMode = true;
@@ -441,8 +385,6 @@ void handleG90(GCodeCommand &cmd) {
 
 /**
  * G91 — относительный режим координат.
- * Все последующие координаты в G0/G1 интерпретируются как приращения
- * (относительно текущей позиции).
  */
 void handleG91(GCodeCommand &cmd) {
     absoluteMode = false;
@@ -451,9 +393,6 @@ void handleG91(GCodeCommand &cmd) {
 
 /**
  * M104 — прямая установка углов сервоприводов (без интерполяции).
- * Для каждого сервопривода P1..P7, у которого задан параметр,
- * устанавливается угол напрямую через servoCtrl.setAngle().
- * Мьютекс защищает currentAngles.
  */
 void handleM104(GCodeCommand &cmd) {
     for (int i = 0; i < 7; i++) {
@@ -469,15 +408,13 @@ void handleM104(GCodeCommand &cmd) {
 
 /**
  * M105 — вывод текущих углов сервоприводов.
- * Формат: Angles: P1=0.0 P2=0.0 ... P7=0.0
  */
 void handleM105(GCodeCommand &cmd) {
     printServoAngles();
 }
 
 /**
- * M114 — вывод текущей позиции энд-эффектора (прямая кинематика).
- * Формат: Position: X=0.0 Y=0.0 Z=0.0
+ * M114 — вывод текущей позиции энд-эффектора (FK).
  */
 void handleM114(GCodeCommand &cmd) {
     printPosition();
@@ -485,8 +422,6 @@ void handleM114(GCodeCommand &cmd) {
 
 /**
  * M112 — аварийная остановка.
- * Немедленно останавливает интерполяцию и отключает все сервоприводы.
- * Используется в экстренных ситуациях (столкновение, сбой и т.д.).
  */
 void handleM112(GCodeCommand &cmd) {
     interpolator.stop();
@@ -496,11 +431,8 @@ void handleM112(GCodeCommand &cmd) {
 
 /**
  * M111 — сохранение текущих углов как домашней позиции.
- * Копирует currentAngles в homeAngles.
- * Мьютекс защищает доступ к currentAngles.
  */
 void handleM111(GCodeCommand &cmd) {
-    // Save current angles as home
     xSemaphoreTake(angleMutex, portMAX_DELAY);
     for (int i = 0; i < 7; i++) {
         homeAngles.angles[i] = currentAngles.angles[i];
@@ -511,8 +443,6 @@ void handleM111(GCodeCommand &cmd) {
 
 /**
  * M400 — установка компенсации люфта.
- * Задаёт поправки на люфт для каждого сервопривода (в градусах).
- * Значения передаются через параметры P1..P7.
  */
 void handleM400(GCodeCommand &cmd) {
     float bl[7] = {};
@@ -527,9 +457,6 @@ void handleM400(GCodeCommand &cmd) {
 
 /**
  * M410 — добавление запретной зоны.
- * Параметры: X, Y, Z (мин. значения) + A, B, C (макс. значения).
- * Если координаты ограничения не заданы — используются значения по умолчанию:
- *   X: -100..100, Y: -100..100, Z: 0..50
  */
 void handleM410(GCodeCommand &cmd) {
     float x1 = cmd.pose.position.x;
@@ -539,7 +466,6 @@ void handleM410(GCodeCommand &cmd) {
     float z1 = cmd.pose.orientation.y;
     float z2 = cmd.pose.orientation.z;
     if (x2 == 0 && y2 == 0 && z2 == 0) {
-        // Значения по умолчанию, если ограничения не заданы
         x1 = -100; x2 = 100; y1 = -100; y2 = 100; z1 = 0; z2 = 50;
     }
     safety.addForbiddenZone(x1, x2, y1, y2, z1, z2);
@@ -547,9 +473,7 @@ void handleM410(GCodeCommand &cmd) {
 }
 
 /**
- * M411 — установка минимальной высоты стола (Z_min).
- * Предотвращает столкновение манипулятора с поверхностью стола.
- * По умолчанию: 50 мм.
+ * M411 — установка минимальной высоты стола.
  */
 void handleM411(GCodeCommand &cmd) {
     float zMin = cmd.pose.position.z;
@@ -559,9 +483,7 @@ void handleM411(GCodeCommand &cmd) {
 }
 
 /**
- * M412 — установка максимального радиуса дотягивания (max reach).
- * Ограничивает максимальное расстояние энд-эффектора от базы.
- * По умолчанию: 395 мм.
+ * M412 — установка максимального радиуса дотягивания.
  */
 void handleM412(GCodeCommand &cmd) {
     float r = cmd.hasParam['R' - 'A'] ? cmd.params['R' - 'A'] : 395.0f;
@@ -570,9 +492,7 @@ void handleM412(GCodeCommand &cmd) {
 }
 
 /**
- * M413 — установка минимального радиуса дотягивания (min reach).
- * Ограничивает минимальное расстояние энд-эффектора от базы.
- * По умолчанию: 50 мм.
+ * M413 — установка минимального радиуса дотягивания.
  */
 void handleM413(GCodeCommand &cmd) {
     float r = cmd.hasParam['R' - 'A'] ? cmd.params['R' - 'A'] : 50.0f;
@@ -581,22 +501,23 @@ void handleM413(GCodeCommand &cmd) {
 }
 
 /**
- * M414 — установка длины пальцев захвата (finger length).
- * Используется в FK-решении и проверке безопасности.
- * По умолчанию: 50 мм.
+ * M414 — установка длины пальцев захвата.
+ *
+ * ВАЖНО: длина пальца передаётся и в FK, и в IK, и в safety.
+ * IK вычитает её из целевой позиции TCP, чтобы solvePosition()
+ * решал задачу для ЗАПЯСТЬЯ. Без этого G0 X100 Y100 Z100 даёт
+ * ошибку ~20 мм.
  */
 void handleM414(GCodeCommand &cmd) {
     float len = cmd.hasParam['L' - 'A'] ? cmd.params['L' - 'A'] : 50.0f;
     fkSolver.setFingerLength(len);
+    ikSolver.setFingerLength(len);   // ← добавить: IK тоже должен знать длину пальца
     safety.setFingerLength(len);
     Serial.println("OK: Finger length = " + String(len, 1));
 }
 
 /**
  * M415 — отключение проверки безопасности.
- * После этой команды проверки запретных зон, ограничений по
- * длине/высоте и длине пальцев НЕ выполняются.
- * Используйте с осторожностью!
  */
 void handleM415(GCodeCommand &cmd) {
     safety.enable(false);
@@ -608,7 +529,6 @@ void handleM415(GCodeCommand &cmd) {
 
 /**
  * M416 — включение проверки безопасности.
- * Все ограничения снова активны.
  */
 void handleM416(GCodeCommand &cmd) {
     safety.enable(true);
@@ -620,7 +540,6 @@ void handleM416(GCodeCommand &cmd) {
 
 /**
  * M417 — вывод списка запретных зон.
- * Выводит количество и параметры всех запретных зон.
  */
 void handleM417(GCodeCommand &cmd) {
     int count = safety.getZoneCount();
@@ -638,9 +557,7 @@ void handleM417(GCodeCommand &cmd) {
 }
 
 /**
- * M420 — установка минимальной высоты Z для конкретного звена (link).
- * Параметр L задаёт номер звена (по умолчанию 0 = база).
- * Параметр Z задаёт минимальную высоту.
+ * M420 — установка минимальной высоты Z для звена.
  */
 void handleM420(GCodeCommand &cmd) {
     int link = cmd.hasParam['L' - 'A'] ? (int)cmd.params['L' - 'A'] : 0;
@@ -651,7 +568,6 @@ void handleM420(GCodeCommand &cmd) {
 
 /**
  * M425 — отключение проверки безопасности (дублирует M415).
- * Оставлено для обратной совместимости.
  */
 void handleM425(GCodeCommand &cmd) {
     safety.enable(false);
@@ -663,7 +579,6 @@ void handleM425(GCodeCommand &cmd) {
 
 /**
  * M426 — включение проверки безопасности (дублирует M416).
- * Оставлено для обратной совместимости.
  */
 void handleM426(GCodeCommand &cmd) {
     safety.enable(true);
@@ -675,11 +590,6 @@ void handleM426(GCodeCommand &cmd) {
 
 /**
  * M430 — выбор стратегии интерполяции движения.
- * Параметр S задаёт стратегию:
- *   0 = INTERP_LINEAR    — линейная интерполяция углов
- *   1 = INTERP_SEQUENTIAL — последовательное перемещение сервоприводов
- *   2 = INTERP_GROUPED    — групповое перемещение
- *   3 = INTERP_AUTO       — автоматический выбор (по умолчанию)
  */
 void handleM430(GCodeCommand &cmd) {
     int s = cmd.hasParam['S' - 'A'] ? (int)cmd.params['S' - 'A'] : 3;
@@ -690,8 +600,6 @@ void handleM430(GCodeCommand &cmd) {
 
 /**
  * M500 — сохранение конфигурации в EEPROM.
- * Сохраняет текущую конфигурацию (config) и домашние углы (homeAngles).
- * Сохраняется при выключении питания и загружается при включении.
  */
 void handleM500(GCodeCommand &cmd) {
     storage.saveConfig(config, homeAngles.angles, interpStrategy);
@@ -700,13 +608,18 @@ void handleM500(GCodeCommand &cmd) {
 
 /**
  * M501 — загрузка конфигурации из EEPROM.
- * Если данные валидны — загружает config и homeAngles,
- * обновляет конфигурацию всех модулей (servoCtrl, ikSolver, fkSolver, safety).
+ *
+ * После загрузки config обновляем зависимые модули:
+ *   - servoCtrl — конфигурация сервоприводов
+ *   - ikSolver  — лимиты углов и длина пальца (для TCP → запястье)
+ *   - fkSolver  — длина пальца (для расчёта TCP)
+ *   - safety    — длина пальца (для проверок безопасности)
  */
 void handleM501(GCodeCommand &cmd) {
     if (storage.loadConfig(config, homeAngles.angles)) {
         servoCtrl.setConfig(config.servos);
         ikSolver.setServoLimits(config.servos);
+        ikSolver.setFingerLength(config.fingerLength);   // ← добавить
         fkSolver.setFingerLength(config.fingerLength);
         safety.setFingerLength(config.fingerLength);
         Serial.println("OK: Loaded from EEPROM");
@@ -717,8 +630,8 @@ void handleM501(GCodeCommand &cmd) {
 
 /**
  * M502 — загрузка конфигурации по умолчанию (заводские настройки).
- * Сбрасывает config, homeAngles и обновляет все модули.
- * EEPROM НЕ перезаписывается — команда только сбрасывает текущее состояние.
+ *
+ * После сброса config обновляем зависимые модули (аналогично M501).
  */
 void handleM502(GCodeCommand &cmd) {
     config = DEFAULT_CONFIG;
@@ -727,6 +640,7 @@ void handleM502(GCodeCommand &cmd) {
     }
     servoCtrl.setConfig(config.servos);
     ikSolver.setServoLimits(config.servos);
+    ikSolver.setFingerLength(config.fingerLength);   // ← добавить
     fkSolver.setFingerLength(config.fingerLength);
     safety.setFingerLength(config.fingerLength);
     Serial.println("OK: Factory defaults loaded");
@@ -734,7 +648,6 @@ void handleM502(GCodeCommand &cmd) {
 
 /**
  * handleHelp (?) — вывод справки по всем доступным командам.
- * Формат: список всех G/M-команд с кратким описанием параметров.
  */
 void handleHelp(GCodeCommand &cmd) {
     Serial.println("=== 6-DOF Robot Arm Commands ===");
@@ -767,13 +680,11 @@ void handleHelp(GCodeCommand &cmd) {
 }
 
 // ====================================================================
-// Вспомогательные функции (helper functions)
+// Вспомогательные функции
 // ====================================================================
 
 /**
  * printServoAngles() — вывод текущих углов всех 7 сервоприводов.
- * Формат: "Angles: P1=0.0 P2=0.0 ... P7=0.0"
- * Используется обработчиком M105.
  */
 void printServoAngles() {
     Serial.print("Angles:");
@@ -787,10 +698,7 @@ void printServoAngles() {
 }
 
 /**
- * printPosition() — вычисление и вывод текущей позиции энд-эффектора
- * с помощью прямой кинематики (FK-solver).
- * Формат: "Position: X=0.0 Y=0.0 Z=0.0"
- * Используется обработчиком M114.
+ * printPosition() — вывод текущей позиции энд-эффектора (FK).
  */
 void printPosition() {
     float q[6];
@@ -809,9 +717,6 @@ void printPosition() {
 
 /**
  * printStatus() — вывод полного статуса манипулятора.
- * Включает: текущий режим координат, состояние безопасности,
- * стратегию интерполяции, домашнюю позицию, статус EEPROM,
- * а также текущие углы и позицию.
  */
 void printStatus() {
     Serial.println("=== Robot Arm Status ===");
@@ -830,35 +735,26 @@ void printStatus() {
 }
 
 // ====================================================================
-// Core 0: чтение Serial + управление движением (главная задача)
+// Core 0: чтение Serial + управление движением
 // ====================================================================
-/**
- * Задача Core0_Motion — выполняется на ядре Core 0.
- *
- * Отвечает за:
- *   - Посимвольное чтение данных из Serial (буферизация строки)
- *   - Парсинг G-code при получении символа '\n' или '\r'
- *   - Выполнение команд (moveTo, установка углов и т.д.)
- *
- * Запускается на Core 0, чтобы не блокировать Core 1.
- * Движение сервоприводов (moveTo) тоже выполняется здесь —
- * это исключает межъядерные конфликты при обновлении PCA9685.
- *
- * Задержка vTaskDelay(5 мс) предотвращает потребление 100% CPU.
- */
 void core0Task(void *pvParameters) {
     String buffer = "";
 
     while (true) {
-        // Посимвольное чтение из Serial на Core 0
         while (Serial.available()) {
             char c = Serial.read();
-            // Конец строки: парсим и выполняем команду
             if (c == '\n' || c == '\r') {
                 if (buffer.length() > 0) {
-                    // Эхо полученной команды в порт
+                    // Эхо команды в Serial
                     Serial.print("> ");
                     Serial.println(buffer);
+
+                    // Сохраняем последнюю команду в sharedState для дисплея
+                    xSemaphoreTake(displayMutex, portMAX_DELAY);
+                    strncpy(sharedState.lastCommand, buffer.c_str(),
+                            sizeof(sharedState.lastCommand) - 1);
+                    sharedState.lastCommand[sizeof(sharedState.lastCommand) - 1] = '\0';
+                    xSemaphoreGive(displayMutex);
 
                     // Парсинг G-code → структура GCodeCommand
                     GCodeCommand cmd = parser.parse(buffer);
@@ -875,76 +771,43 @@ void core0Task(void *pvParameters) {
             }
         }
 
-        // Пауза 5 мс: даёт время другим задачам (Core 1, FreeRTOS scheduler)
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
 
 // ====================================================================
-// Core 1: фоновые задачи (дисплей, индикаторы и т.д.)
+// Core 1: дисплей
 // ====================================================================
-/**
- * Задача Core1_Serial — выполняется на ядре Core 1.
- *
- * В данный момент пуста (зарезервирована) — предназначена для:
- *   - Управления SPI-дисплеем (отображение углов, позиции, статуса)
- *   - Мигания светодиодами индикатора
- *   - Обработки кнопок
- *   - Любых фоновых задач, не требующих доступа к Serial
- *
- * Задержка vTaskDelay(200 мс) — достаточно для обновления дисплея
- * или обработки UI.
- */
 void core1Task(void *pvParameters) {
-    // Инициализация дисплея на Core 1 (SPI отдельный поток)
-    // displayInit();
     Serial.println("[Core1] Display task started");
     while (true) {
-        // Обновление дисплея каждые200мс
         displayUpdate();
         vTaskDelay(pdMS_TO_TICKS(200));
     }
 }
 
 // ====================================================================
-// setup() — последовательность инициализации при старте контроллера
+// setup() — инициализация
 // ====================================================================
-/**
- * setup() — вызывается один раз при загрузке ESP32.
- *
- * Последовательность:
- *   1. Инициализация Serial (115200 бод) для отладочного вывода
- *   2. Инициализация контроллера сервоприводов (PCA9685)
- *   3. Настройка интерполятора (связь с servoCtrl, backlash, safety)
- *   4. Инициализация контроллера захвата
- *   5. Инициализация EEPROM-хранилища
- *   6. Загрузка конфигурации из EEPROM (или использование значений по умолчанию)
- *   7. Создание мьютекса angleMutex для защиты currentAngles
- *   8. Создание задач FreeRTOS и привязка к ядрам:
- *        - Core 0 → core0Task (Serial + движение)
- *        - Core 1 → core1Task (фоновые задачи)
- *   9. Вывод приветственного сообщения и инструкций
- *
- * Функция loop() пуста — вся работа делается задачами FreeRTOS.
- */
 void setup() {
     Serial.begin(115200);
     delay(1000);
 
-    // === Инициализация дисплея ПЕРЕД I2C/PCA9685 ===
-    // Если I2C зависнет — дисплей уже работает и покажет статус
+    // Инициализация дисплея ПЕРЕД I2C/PCA9685
     displayInit();
-    
+
     Serial.println("=== 6-DOF Robot Arm Controller ===");
     Serial.println("ESP32 @ 240 MHz, PCA9685, 7 servos");
-    
-    // Инициализация модулей
-    servoCtrl.init();                   // PCA9685, I2C, ШИМ-каналы
-    servoCtrl.setConfig(config.servos); // Установка ограничений сервоприводов
 
-    // Сохраняем состояние PCA9685 в SharedState (для отображения на дисплее).
-    // servoCtrl.init() выставляет внутренний флаг pca9685Available,
-    // читаем его через геттер isPcaAvailable().
+    // Создание мьютексов ДО первого использования
+    angleMutex = xSemaphoreCreateMutex();
+    displayMutex = xSemaphoreCreateMutex();
+
+    // Инициализация PCA9685
+    servoCtrl.init();
+    servoCtrl.setConfig(config.servos);
+
+    // Сохраняем состояние PCA9685 в SharedState
     xSemaphoreTake(displayMutex, portMAX_DELAY);
     sharedState.pcaReady = servoCtrl.isPcaAvailable();
     xSemaphoreGive(displayMutex);
@@ -952,7 +815,7 @@ void setup() {
     if (servoCtrl.isPcaAvailable()) {
         Serial.println("PCA9685: OK (servos active)");
     } else {
-        Serial.println("PCA9685: NOT FOUND (debug mode, servos disabled)");
+        Serial.println("PCA9685: NOT FOUND (debug mode)");
     }
 
     // Связывание интерполятора с зависимостями
@@ -962,83 +825,51 @@ void setup() {
     interpolator.setStrategy(interpStrategy);
 
     gripper.setServoController(&servoCtrl);
+    storage.begin();
 
-    storage.begin();  // Инициализация EEPROM
-
-    // Загрузка конфигурации из EEPROM (или значений по умолчанию)
+    // Загрузка конфигурации из EEPROM
     if (storage.isConfigValid()) {
         if (storage.loadConfig(config, homeAngles.angles)) {
             servoCtrl.setConfig(config.servos);
             ikSolver.setServoLimits(config.servos);
+            ikSolver.setFingerLength(config.fingerLength);   // ← добавить
             fkSolver.setFingerLength(config.fingerLength);
             safety.setFingerLength(config.fingerLength);
             Serial.println("Config loaded from EEPROM");
         }
     } else {
-        // EEPROM пуста — используем конфигурацию по умолчанию
         for (int i = 0; i < 7; i++) {
             homeAngles.angles[i] = DEFAULT_HOME_ANGLES[i];
         }
+        ikSolver.setFingerLength(config.fingerLength);   // ← добавить
         fkSolver.setFingerLength(config.fingerLength);
         safety.setFingerLength(config.fingerLength);
         Serial.println("Using default config");
     }
 
-    // Создание мьютекса для защиты currentAngles от гонок между задачами
-    angleMutex = xSemaphoreCreateMutex();
-
-    // Создание мьютекса для защиты SharedState от гонок между задачами
-    displayMutex = xSemaphoreCreateMutex();
-
-    // Регистрация callback интерполятора для обновления SharedState
-    // в реальном времени (вызывается на каждом шаге ~20мс)
     interpolator.setStepCallback(onInterpolationStep);
 
-    // Инициализация SharedState начальными значениями
+    // Инициализация SharedState
     memset(&sharedState, 0, sizeof(sharedState));
     sharedState.safetyEnabled = safety.isEnabled();
+    sharedState.pcaReady = servoCtrl.isPcaAvailable();
     sharedState.tcpPosition = fkSolver.getEndEffector(homeAngles.angles);
     for (int i = 0; i < 7; i++) {
         sharedState.servoAngles[i] = homeAngles.angles[i];
     }
+    strncpy(sharedState.lastCommand, "-", sizeof(sharedState.lastCommand) - 1);
 
-    // Создание задачи Core 0: чтение Serial + управление движением
-    // Стек: 8192 байт, приоритет: 1, привязка к ядру 0
-    xTaskCreatePinnedToCore(
-        core0Task,
-        "Core0_Motion",
-        8192,
-        NULL,
-        1,
-        &core0TaskHandle,
-        0  // Core 0
-    );
-
-    // Создание задачи Core 1: дисплей ST7789
-    // Стек: 8192 байт (TFT_eSPI требует больше памяти), приоритет: 1, привязка к ядру 1
-    xTaskCreatePinnedToCore(
-        core1Task,
-        "Core1_Display",
-        8192,
-        NULL,
-        1,
-        &core1TaskHandle,
-        1  // Core 1
-    );
+    // Создание задач
+    xTaskCreatePinnedToCore(core0Task, "Core0_Motion",  8192, NULL, 1, &core0TaskHandle, 0);
+    xTaskCreatePinnedToCore(core1Task, "Core1_Display", 8192, NULL, 1, &core1TaskHandle, 1);
 
     Serial.println("Ready. Send G-code commands.");
-    Serial.println("Protocol: send command, wait for OK/ERROR before next.");
     Serial.println("Type '?' for help");
 }
 
 // ====================================================================
-// Дисплей: callback интерполятора
+// Callback интерполятора
 // ====================================================================
-/**
- * onInterpolationStep() — вызывается на каждом шаге интерполяции (~20мс).
- * Обновляет SharedState текущими промежуточными углами и TCP-позицией.
- * Вызывается из Core0 (внутри interpolator.moveTo), защищается displayMutex.
- */
 void onInterpolationStep(const JointAngles &angles) {
     if (!displayMutex) return;
 
@@ -1056,44 +887,41 @@ void onInterpolationStep(const JointAngles &angles) {
 }
 
 // ====================================================================
-// Дисплей: константы и координаты зон (ST7789 240×240)
+// Дисплей: цвета, зоны
 // ====================================================================
 
 // Цвета
-#define COLOR_ZONE_HEADER_BG  0x000F
+#define COLOR_ZONE_HEADER_BG  0x000F   // navy (тёмно-синий)
 #define COLOR_ZONE_HEADER_FG  ST77XX_CYAN
 #define COLOR_FIELD_LABEL     ST77XX_WHITE
 #define COLOR_TCP             ST77XX_GREEN
 #define COLOR_JOINT           ST77XX_YELLOW
-#define COLOR_GRIPPER         0xFDA0  // оранжевый
+#define COLOR_GRIPPER         0xFDA0   // оранжевый
 #define COLOR_READY           ST77XX_GREEN
 #define COLOR_MOVING          ST77XX_YELLOW
 #define COLOR_ERROR           ST77XX_RED
+#define COLOR_STATUS_LABEL    ST77XX_WHITE
+#define COLOR_STATUS_VALUE    ST77XX_CYAN
 
 // Шрифт: setTextSize(2) = 16px высота строки
 #define FONT_HEIGHT  16
-#define ZONE_GAP     4   // отступ между зонами
 
 // Координаты зон (Y начала)
 #define ZONE_TCP_Y      0
-#define ZONE_TCP_H      56     // 16 header + 3×16 строки (чуть меньше)
-#define ZONE_JOINTS_Y   56
-#define ZONE_JOINTS_H   112    // 16 header + 6×16 строки
-#define ZONE_GRIPPER_Y  168
-#define ZONE_GRIPPER_H  32     // 16 header + 16 строка
-#define ZONE_STATUS_Y   200
-#define ZONE_STATUS_H   40     // 2 строки ×16 + отступы
+#define ZONE_TCP_H      72
+#define ZONE_JOINTS_Y   72
+#define ZONE_JOINTS_H   104
+#define ZONE_STATUS_Y   176
+#define ZONE_STATUS_H   64
 
-// Поля для zone header: высота 16px
 #define HEADER_H  16
 
 // ====================================================================
-// Дисплей: вспомогательные функции отрисовки
+// Дисплей: вспомогательные функции
 // ====================================================================
 
 /**
  * drawZoneHeader() — рисует цветной заголовок зоны.
- * Фон: COLOR_ZONE_HEADER_BG, текст: COLOR_ZONE_HEADER_FG.
  */
 static void drawZoneHeader(int y, const char *title) {
     tft.fillRect(0, y, 240, HEADER_H, COLOR_ZONE_HEADER_BG);
@@ -1103,32 +931,32 @@ static void drawZoneHeader(int y, const char *title) {
 }
 
 /**
- * drawField() — рисует строку: название + число + единица + пробел.
- * Всё печатается ОДНИМ вызовом tft.print() — быстро и без лишних SPI-транзакций.
- * Хвостовой пробел стирает старый (более длинный) текст — fillRect не нужен.
- * lastValue хранится для антифилкера (не перерисовывать при мелких изменениях).
- *
- * xLeft  — X-координата начала поля (левая колонка = 4, правая = 124).
- * xRight — X-координата правого края (число выравнивается вправо).
+ * drawField() — рисует строку: метка (xLabel) + число (xValue).
+ * Формат числа "%4.0f%s " — целое, фиксированное поле 4 знака.
+ * lastValue — антифилкер (не перерисовывать, если изменение < 0.5).
  */
-static float lastTCP[6] = {9999, 9999, 9999, 9999, 9999, 9999};
-static float lastJoints[7] = {9999, 9999, 9999, 9999, 9999, 9999, 9999};
-static float lastGrip = -1;
+static float lastTCP[6]    = {99999, 99999, 99999, 99999, 99999, 99999};
+static float lastJoints[7] = {99999, 99999, 99999, 99999, 99999, 99999, 99999};
+static float lastGrip      = -1;
 
-static void drawField(int xLeft, int xRight, int y,
+static void drawField(int xLabel, int xValue, int y,
                       const char *label, float value, float &lastVal,
                       uint16_t color, const char *unit, bool forceRedraw = false) {
-    if (!forceRedraw && fabs(value - lastVal) < 0.05f) return;
+    if (!forceRedraw && fabs(value - lastVal) < 0.5f) return;
     lastVal = value;
 
-    // Одна строка: " P1:  200.0 " — метка + число + единица + пробел
-    char buf[24];
-    snprintf(buf, sizeof(buf), "%s%6.1f%s ", label, value, unit);
-    int textW = strlen(buf) * 6 * 2;
-
     tft.setTextSize(2);
-    tft.setTextColor(color, ST77XX_BLACK);   // фон закрашивает старый хвост
-    tft.setCursor(xRight - textW, y);
+
+    // Метка слева
+    tft.setTextColor(COLOR_FIELD_LABEL, ST77XX_BLACK);
+    tft.setCursor(xLabel, y);
+    tft.print(label);
+
+    // Число — фиксированное поле, знак "-" не сдвигает цифры
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%4.0f%s ", value, unit);
+    tft.setTextColor(color, ST77XX_BLACK);
+    tft.setCursor(xValue, y);
     tft.print(buf);
 }
 
@@ -1138,137 +966,137 @@ static void drawField(int xLeft, int xRight, int y,
 
 /**
  * displayInit() — инициализация ST7789 дисплея.
- * Устанавливает поворот, очищает экран чёрным, рисует заголовки зон.
- * Вызывается один раз из Core1 при старте.
- *
- * Оптимизация: SPI переведён на 40 МГц — в 5 раз быстрее дефолтных 8 МГц.
  */
 void displayInit() {
-    tft.init(240, 240);        // Размер экрана 240×240
-    tft.setSPISpeed(40000000); // 40 МГц — ускоряет отрисовку в 5 раз
-    tft.setRotation(2);        // 0 = как есть, 2 = поворот на 180°
+    tft.init(240, 240);
+    tft.setSPISpeed(40000000);   // 40 МГц
+    tft.setRotation(2);           // поворот 180°
     tft.fillScreen(ST77XX_BLACK);
 
-    // Вывод "6DOF" на экран (большие буквы)
+    // Заставка: "6DOF" + "Initializing..."
     tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
-    tft.setTextSize(3);  // Крупный шрифт
+    tft.setTextSize(3);
     tft.setCursor(40, 80);
     tft.println("  6DOF");
-    tft.setTextSize(2);  // Возвращаем обычный размер
+    tft.setTextSize(2);
     tft.setCursor(20, 120);
     tft.setTextColor(ST77XX_CYAN, ST77XX_BLACK);
     tft.println(" Initializing...");
     delay(2000);
     tft.fillScreen(ST77XX_BLACK);
 
-    tft.setTextSize(2);        // Размер шрифта 2 (16px)
+    tft.setTextSize(2);
 
-    // Начальная отрисовка заголовков зон и пустых полей
-    drawZoneHeader(ZONE_TCP_Y, "TCP POS.");
+    // Заголовки зон
+    drawZoneHeader(ZONE_TCP_Y,    "TCP POS.");
     drawZoneHeader(ZONE_JOINTS_Y, "JOINTS");
-    drawZoneHeader(ZONE_GRIPPER_Y, "GRIPPER");
 
-    // Инициализация last-значений для antiflicker
-    for (int i = 0; i < 6; i++) lastTCP[i] = 9999;
-    for (int i = 0; i < 7; i++) lastJoints[i] = 9999;
+    // Инициализация last-значений
+    for (int i = 0; i < 6; i++) lastTCP[i] = 99999;
+    for (int i = 0; i < 7; i++) lastJoints[i] = 99999;
     lastGrip = -1;
 }
 
 /**
  * displayUpdate() — обновление данных на экране.
- * Читает SharedState через displayMutex, рисует только изменившиеся значения.
- * Вызывается из Core1 каждые 200мс.
- *
- * Компоновка (двухколоночная для компактности):
- *   ┌─TCP POS.──────────────────┐
- *   │ X:  200.0mm               │
- *   │ Y:   50.0mm               │
- *   │ Z:  250.0mm               │
- *   ├─JOINTS────────────────────┤
- *   │ P1:   0.0     P4:   0.0   │
- *   │ P2: -40.0     P5:   0.0   │
- *   │ P3:   0.0     P6:   0.0   │
- *   ├─GRIPPER───────────────────┤
- *   │ G:    50.0%               │
- *   │                           │
- *   │  READY       Safety:ON    │
- *   │              PCA:ON       │
- *   └───────────────────────────┘
+ * Вызывается из Core1 каждые 200 мс.
  */
 void displayUpdate() {
     SharedState state;
 
     // Копирование SharedState под мьютексом
+    if (displayMutex == NULL) return;
     if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(10)) != pdTRUE) return;
     state = sharedState;
     xSemaphoreGive(displayMutex);
 
-    // Batch-режим SPI: начало
     tft.startWrite();
 
-    // === TCP Position Zone (3 строки) ===
-    // Левая колонка x=4..118, правая x=124..236
-    drawField(4,   118, ZONE_TCP_Y + HEADER_H + 0,  " X:", state.tcpPosition.x, lastTCP[0], COLOR_TCP, "mm");
-    drawField(4,   118, ZONE_TCP_Y + HEADER_H + 16, " Y:", state.tcpPosition.y, lastTCP[1], COLOR_TCP, "mm");
-    drawField(4,   118, ZONE_TCP_Y + HEADER_H + 32, " Z:", state.tcpPosition.z, lastTCP[2], COLOR_TCP, "mm");
+    // === TCP Position Zone (3 строки, +2 px от заголовка) ===
+    drawField(4, 30, ZONE_TCP_Y + HEADER_H + 2,  "X:", state.tcpPosition.x, lastTCP[0], COLOR_TCP, "mm");
+    drawField(4, 30, ZONE_TCP_Y + HEADER_H + 18, "Y:", state.tcpPosition.y, lastTCP[1], COLOR_TCP, "mm");
+    drawField(4, 30, ZONE_TCP_Y + HEADER_H + 34, "Z:", state.tcpPosition.z, lastTCP[2], COLOR_TCP, "mm");
 
-    // === Joints Zone (3 строки × 2 колонки) ===
-    //  |P1: xxxx    P4: xxxx|
-    //  |P2: xxxx    P5: xxxx|
-    //  |P3: xxxx    P6: xxxx|
-    drawField(4,   118, ZONE_JOINTS_Y + HEADER_H + 0,  " P1:", state.servoAngles[0], lastJoints[0], COLOR_JOINT, "");
-    drawField(124, 236, ZONE_JOINTS_Y + HEADER_H + 0,  " P4:", state.servoAngles[3], lastJoints[3], COLOR_JOINT, "");
+    // === Joints Zone (4 строки × 2 колонки, +2 px от заголовка) ===
+    drawField(4,   40,  ZONE_JOINTS_Y + HEADER_H + 2,  "P1:", state.servoAngles[0], lastJoints[0], COLOR_JOINT, "");
+    drawField(124, 160, ZONE_JOINTS_Y + HEADER_H + 2,  "P4:", state.servoAngles[3], lastJoints[3], COLOR_JOINT, "");
 
-    drawField(4,   118, ZONE_JOINTS_Y + HEADER_H + 16, " P2:", state.servoAngles[1], lastJoints[1], COLOR_JOINT, "");
-    drawField(124, 236, ZONE_JOINTS_Y + HEADER_H + 16, " P5:", state.servoAngles[4], lastJoints[4], COLOR_JOINT, "");
+    drawField(4,   40,  ZONE_JOINTS_Y + HEADER_H + 18, "P2:", state.servoAngles[1], lastJoints[1], COLOR_JOINT, "");
+    drawField(124, 160, ZONE_JOINTS_Y + HEADER_H + 18, "P5:", state.servoAngles[4], lastJoints[4], COLOR_JOINT, "");
 
-    drawField(4,   118, ZONE_JOINTS_Y + HEADER_H + 32, " P3:", state.servoAngles[2], lastJoints[2], COLOR_JOINT, "");
-    drawField(124, 236, ZONE_JOINTS_Y + HEADER_H + 32, " P6:", state.servoAngles[5], lastJoints[5], COLOR_JOINT, "");
+    drawField(4,   40,  ZONE_JOINTS_Y + HEADER_H + 34, "P3:", state.servoAngles[2], lastJoints[2], COLOR_JOINT, "");
+    drawField(124, 160, ZONE_JOINTS_Y + HEADER_H + 34, "P6:", state.servoAngles[5], lastJoints[5], COLOR_JOINT, "");
 
-    // === Gripper Zone (1 строка) ===
-    drawField(4, 236, ZONE_GRIPPER_Y + HEADER_H, " G:", state.gripperPercent, lastGrip, COLOR_GRIPPER, "%");
+    drawField(4, 100, ZONE_JOINTS_Y + HEADER_H + 50, "Gripper:", state.gripperPercent, lastGrip, COLOR_GRIPPER, "%");
 
-    // === Status Bar (2 строки) ===
-    // Левая часть: статус READY / MOVING / ERROR
+    // === Status Bar (3 строки) ===
+    int sy = ZONE_STATUS_Y + 8;
+
+    // --- Строка 1: READY / MOVING / ERROR + счётчик справа ---
     tft.setTextSize(2);
-    tft.setCursor(4, ZONE_STATUS_Y + 4);
+    tft.setCursor(4, sy);
     if (state.hasError) {
         tft.setTextColor(COLOR_ERROR, ST77XX_BLACK);
-        tft.print("! ERROR   ");
+        tft.print("! ERROR  ");
     } else if (state.isMoving) {
         tft.setTextColor(COLOR_MOVING, ST77XX_BLACK);
-        tft.print("> MOVING  ");
+        tft.print("> MOVING ");
     } else {
         tft.setTextColor(COLOR_READY, ST77XX_BLACK);
-        tft.print("  READY   ");
+        tft.print("READY    ");
     }
 
-    // Нижняя строка: Safety слева, PCA справа
-    tft.setCursor(4, ZONE_STATUS_Y + 20);
-    tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
-    tft.print("Safety:");
+    // Счётчик прижат вправо
+    char cntBuf[8];
+    snprintf(cntBuf, sizeof(cntBuf), "%4u ", (unsigned)state.commandCount);
+    int cntW = strlen(cntBuf) * 6 * 2;
+    tft.setCursor(236 - cntW, sy);
+    tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
+    tft.print(cntBuf);
+
+    // --- Строка 2: Safe + PCA + ABS/REL ---
+    sy += 16;
+    tft.setCursor(4, sy);
+    tft.setTextColor(COLOR_STATUS_LABEL, ST77XX_BLACK);
+    tft.print("Safe:");
     tft.setTextColor(state.safetyEnabled ? ST77XX_GREEN : ST77XX_RED, ST77XX_BLACK);
     tft.print(state.safetyEnabled ? "ON " : "OFF");
 
-    tft.setCursor(130, ZONE_STATUS_Y + 20);
-    tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
+    tft.setCursor(98, sy);
+    tft.setTextColor(COLOR_STATUS_LABEL, ST77XX_BLACK);
     tft.print("PCA:");
     tft.setTextColor(state.pcaReady ? ST77XX_GREEN : ST77XX_RED, ST77XX_BLACK);
     tft.print(state.pcaReady ? "ON " : "OFF");
 
-    // Batch-режим SPI: конец
+    const char *modeStr = absoluteMode ? "ABS " : "REL ";
+    int modeW = 4 * 6 * 2;
+    tft.setCursor(236 - modeW, sy);
+    tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
+    tft.print(modeStr);
+
+    // --- Строка 3: последняя команда ---
+    // Формат: "G:" + команда (до 17 символов) + хвостовые пробелы
+    // до фиксированной ширины 20 символов = 240 px при size=2.
+    sy += 16;
+    tft.setCursor(4, sy);
+    tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
+
+    char cmdBuf[32];
+    snprintf(cmdBuf, sizeof(cmdBuf), "G:%-17.17s", state.lastCommand);
+    // Добиваем пробелами до 20 символов (240 px)
+    int cmdW = strlen(cmdBuf) * 6 * 2;
+    while (cmdW < 20 * 12 && strlen(cmdBuf) < sizeof(cmdBuf) - 1) {
+        strcat(cmdBuf, " ");
+        cmdW = strlen(cmdBuf) * 6 * 2;
+    }
+    tft.print(cmdBuf);
+
     tft.endWrite();
 }
 
 // ====================================================================
 // loop() — пуста (вся работа делается задачами FreeRTOS)
 // ====================================================================
-/**
- * loop() — стандартная функция Arduino.
- * Пуста, так как вся логика выполняется в задачах FreeRTOS
- * (core0Task на Core 0, core1Task на Core 1).
- * Просто ждёт, чтобы не потреблять 100% CPU.
- */
 void loop() {
     vTaskDelay(pdMS_TO_TICKS(1000));
 }

@@ -4,384 +4,268 @@
  * Group       :
  * Mentor      : Lipko I.Y.
  * Date        : 2026-09-18
- * Last modify : 2026-09-18
+ * Last modify : 2026-09-25
  */
 
-#include "safety_checker.h"
-#include <cmath>
+#include "servo_controller.h"
 
 /**
- * @brief Конструктор по умолчанию.
+ * Инициализация сервоконтроллера.
  *
- * Инициализирует проверку безопасности с параметрами по умолчанию из конфигурации:
- * - DEFAULT_LINK_SAFETY: безопасные расстояния для звеньев
- * - WORKSPACE: границы рабочей области
- * - GRIPPER_FINGER_LENGTH: длина пальца захватчика
- * Количество запрещенных зон устанавливается в 0, проверки включены.
+ * Шаг 1: Создание объекта PCA9685 с I2C-адресом 0x40.
+ *   Адрес 0x40 — стандартный для модулей Adafruit PCA9685.
+ *   Если на плате выпаяны перемычки A0–A5, адрес может быть другим
+ *   (0x41–0x7F). Адрес формируется как: 0x40 | (A5<<5 | ... | A0).
+ *
+ * Шаг 2: pwm.begin() — инициализирует I2C-хост (Wire) и сбрасывает
+ *   все регистры PCA9685 в начальное состояние.
+ *
+ * Шаг 3: pwm.setPWMFreq(50) — установка частоты ШИМ = 50 Гц.
+ *   Стандартная частота для сервоприводов. Период = 20 мс.
+ *   PCA9685 делит период на 4096 тиков, поэтому 1 тик ≈ 4.88 мкс.
+ *   Управляющий импульс серво длится от ~1 мс (0°) до ~2 мс (180°).
+ *
+ * Шаг 4: Загрузка конфигураций из DEFAULT_CONFIG для каждого серво.
  */
-SafetyChecker::SafetyChecker()
-    : linkSafety(DEFAULT_LINK_SAFETY),
-      workspace(WORKSPACE),
-      zoneCount(0),
-      enabled(true),
-      fingerLength(GRIPPER_FINGER_LENGTH) {}
+void ServoController::init() {
+    pwm = Adafruit_PWMServoDriver(0x40);
+    
+    // Проверяем, отвечает ли PCA9685 по I2C
+    Wire.beginTransmission(0x40);
+    uint8_t error = Wire.endTransmission();
+    
+    if (error == 0) {
+        pca9685Available = true;
+        pwm.begin();
+        pwm.setPWMFreq(50);  // 50 Гц — стандартная частота для сервоприводов
+    } else {
+        pca9685Available = false;
+        Serial.println("WARN: PCA9685 not found at 0x40, running in debug mode");
+    }
 
-/**
- * @brief Установка конфигурации безопасности.
- * Заменяет текущие параметры безопасности звеньев и границы рабочей области.
- */
-void SafetyChecker::setConfig(const LinkSafety &ls, const WorkspaceLimits &ws) {
-    linkSafety = ls;
-    workspace = ws;
-}
-
-/**
- * @brief Установка минимальной высоты стола (общий Z минимум).
- * Это предотвращает столкновение любых частей робота со столом.
- */
-void SafetyChecker::setTableZMin(float zMin) {
-    workspace.zMin = zMin;
-}
-
-/**
- * @brief Установка максимального радиуса дотягивания.
- * Определяет максимальное расстояние от вертикальной оси основания (ось Z)
- * до любой точки робота. Защита от чрезмерного вытягивания.
- */
-void SafetyChecker::setMaxReach(float maxR) {
-    linkSafety.maxReach = maxR;
-}
-
-/**
- * @brief Установка минимального радиуса дотягивания.
- * Определяет минимальное расстояние от вертикальной оси основания.
- * Защита от слишком близкого расположения к основанию (самопересечение).
- */
-void SafetyChecker::setMinReach(float minR) {
-    linkSafety.minReach = minR;
-}
-
-/**
- * @brief Установка минимальной высоты Z для конкретного звена.
- * Каждое звено может иметь свой порог минимальной высоты для
- * предотвращения столкновения с препятствиями на рабочей поверхности.
- * Допустимые индексы: 0-5 (6 основных звеньев).
- */
-void SafetyChecker::setLinkZMin(int link, float zMin) {
-    if (link >= 0 && link < 6) {
-        linkSafety.zMin[link] = zMin;
+    // Копируем конфигурации из глобального массива DEFAULT_CONFIG
+    for (int i = 0; i < 7; i++) {
+        configs[i] = DEFAULT_CONFIG.servos[i];
     }
 }
 
 /**
- * @brief Установка длины пальца захватчика.
- * Используется для проверки безопасности виртуального 7-го звена (палец).
+ * Установка конфигурации для всех 7 сервоприводов.
+ *
+ * Конфигурация каждого серво (ServoConfig) содержит:
+ *   - minPWM / maxPWM     — ширина PWM-импульса в мкс для предельных углов
+ *   - minAngle / maxAngle — предельные МАТЕМАТИЧЕСКИЕ углы серво (градусы)
+ *   - correctionFactor    — корректирующий множитель (100.0 = без коррекции)
+ *   - isInverted          — флаг инвертирования направления вращения
+ *   - backlash            — величина люфта в градусах
+ *   - homeOffset          — сдвиг math → servo (135° / 90° / 0°)
+ *
+ * minAngle/maxAngle — в МАТЕМАТИЧЕСКОМ диапазоне (-135..+135, -90..+90,
+ * 0..100). homeOffset прибавляется внутри setAngle() и angleToPulse()
+ * перед конвертацией в PWM.
  */
-void SafetyChecker::setFingerLength(float len) {
-    fingerLength = len;
-    fkSolver.setFingerLength(len);
-}
-
-void SafetyChecker::setDHParams(const float dh[6][4]) {
-    fkSolver.setDHParams(dh);
-}
-
-/**
- * @brief Добавление запрещенной зоны (прямоугольный параллелепипед).
- * Координаты границ автоматически сортируются (min/max), поэтому
- * порядок подачи x1/x2, y1/y2, z1/z2 не важен.
- * Максимальное количество зон: MAX_FORBIDDEN_ZONES.
- */
-void SafetyChecker::addForbiddenZone(float x1, float x2, float y1, float y2,
-                                      float z1, float z2) {
-    if (zoneCount >= MAX_FORBIDDEN_ZONES) return;
-    zones[zoneCount] = {
-        .xMin = fmin(x1, x2), .xMax = fmax(x1, x2),
-        .yMin = fmin(y1, y2), .yMax = fmax(y1, y2),
-        .zMin = fmin(z1, z2), .zMax = fmax(z1, z2),
-        .active = true,
-    };
-    zoneCount++;
-}
-
-/**
- * @brief Очистка всех запрещенных зон.
- * Устанавливает счетчик зон в 0, фактически деактивируя все зоны.
- */
-void SafetyChecker::clearForbiddenZones() {
-    zoneCount = 0;
-}
-
-/**
- * @brief Включение/отключение проверок безопасности.
- * При отключении все методы проверки (checkPosition, checkAllLinks,
- * checkTrajectory) будут безусловно возвращать true.
- */
-void SafetyChecker::enable(bool en) {
-    enabled = en;
-}
-
-bool SafetyChecker::isEnabled() const {
-    return enabled;
-}
-
-String SafetyChecker::getLastError() const {
-    return lastError;
-}
-
-int SafetyChecker::getZoneCount() const {
-    return zoneCount;
-}
-
-bool SafetyChecker::getForbiddenZone(int index, float &x1, float &x2, float &y1, float &y2, float &z1, float &z2, bool &active) const {
-    if (index < 0 || index >= MAX_FORBIDDEN_ZONES) return false;
-    x1 = zones[index].xMin;
-    x2 = zones[index].xMax;
-    y1 = zones[index].yMin;
-    y2 = zones[index].yMax;
-    z1 = zones[index].zMin;
-    z2 = zones[index].zMax;
-    active = zones[index].active;
-    return true;
-}
-
-/**
- * @brief Проверка попадания точки в рабочую область.
- * Рабочая область определяется прямоугольным параллелепипедом
- * с границами: x ∈ [xMin, xMax], y ∈ [yMin, yMax], z ∈ [zMin, zMax].
- */
-bool SafetyChecker::insideWorkspace(const Vec3 &p) const {
-    return (p.x >= workspace.xMin && p.x <= workspace.xMax &&
-            p.y >= workspace.yMin && p.y <= workspace.yMax &&
-            p.z >= workspace.zMin && p.z <= workspace.zMax);
-}
-
-/**
- * @brief Проверка попадания точки в запрещенную зону.
- * Перебирает все активные запрещенные зоны. Если точка попадает
- * внутрь хотя бы одной зоны (все 6 координат в пределах), возвращает true.
- * Неактивные зоны пропускаются.
- */
-bool SafetyChecker::insideForbiddenZone(const Vec3 &p) const {
-    for (int i = 0; i < zoneCount; i++) {
-        if (!zones[i].active) continue;
-        if (p.x >= zones[i].xMin && p.x <= zones[i].xMax &&
-            p.y >= zones[i].yMin && p.y <= zones[i].yMax &&
-            p.z >= zones[i].zMin && p.z <= zones[i].zMax) {
-            return true;
-        }
+void ServoController::setConfig(const ServoConfig configs[7]) {
+    for (int i = 0; i < 7; i++) {
+        this->configs[i] = configs[i];
     }
-    return false;
 }
 
 /**
- * @brief Линейная интерполяция точки на отрезке.
- * Формула: result = a + (b - a) * t
- * При t=0 возвращает точку a, при t=1 — точку b.
+ * Установка угла для одного сервопривода.
+ *
+ * Полный алгоритм обработки угла (обновлён 2026-09-25):
+ *
+ * 0. HOME OFFSET (math → servo):
+ *    q_math — математический угол из IK (0 = «нулевая поза»).
+ *    servoAngle = q_math + homeOffset — физический угол сервы.
+ *    P1–P3: homeOffset = 135° (math 0 → серва 135°)
+ *    P4–P6: homeOffset =  90° (math 0 → серва  90°)
+ *    P7:    homeOffset =   0°
+ *
+ * 1. ВАЛИДАЦИЯ: проверяем, что servoId в диапазоне [0, 6],
+ *    и что сервоприводы включены (enabled = true).
+ *
+ * 2. КОРРЕКЦИЯ МНОЖИТЕЛЕМ (correctionFactor):
+ *    correctedAngle = servoAngle * (correctionFactor / 100.0)
+ *
+ * 3. ИНВЕРТИРОВАНИЕ НАПРАВЛЕНИЯ (isInverted):
+ *    correctedAngle = -correctedAngle (если isInverted)
+ *
+ * 4. ОГРАНИЧЕНИЕ УГЛА (clamping):
+ *    constrain(correctedAngle, minAngle+homeOffset, maxAngle+homeOffset)
+ *    — в СЕРВО-диапазоне (после offset).
+ *
+ * 5. КОНВЕРТАЦИЯ В PWM: angleToPulse() → тики PCA9685.
+ *
+ * 6. ЗАПИСЬ В PCA9685: pwm.setPWM(channel, 0, pulse).
+ *
+ * 7. СОХРАНЕНИЕ: в currentAngles хранится МАТЕМАТИЧЕСКИЙ угол (q_math),
+ *    а не servo — чтобы FK/IK/safety/display работали в «чистой» СК.
+ *
+ * @param servoId  индекс сервопривода (0–5: оси, 6: захват)
+ * @param angle    МАТЕМАТИЧЕСКИЙ угол (q_math) в градусах
  */
-Vec3 SafetyChecker::sampleOnLink(const Vec3 &a, const Vec3 &b, float t) const {
-    return a + (b - a) * t;
-}
+void ServoController::setAngle(int servoId, float angle) {
+    // Проверка допустимости индекса сервопривода
+    if (servoId < 0 || servoId > 6) return;
+    // Сервоприводы отключены — игнорируем команду
+    if (!enabled) return;
 
-/**
- * @brief Проверка безопасности одного звена.
- *
- * Метод сэмплирует 5 точек равномерно вдоль звена (от jointA до jointB)
- * и для каждой точки выполняет комплексную проверку:
- *
- * 1. Минимальная высота Z: для каждого звена задается свой порог zMin.
- *    Для виртуального 7-го звена (палец) используется zMin звена 5.
- *    Это предотвращает столкновение звена с рабочей поверхностью.
- *
- * 2. Границы рабочей области: точка должна находиться внутри
- *    прямоугольной области workspace.
- *
- * 3. Цилиндрический радиус дотягивания (reach):
- *    - maxReach: максимальное расстояние от оси Z основания (защита от перерастяжения)
- *    - minReach: минимальное расстояние от оси Z основания (защита от самопересечения)
- *    Радиус вычисляется как sqrt(x² + y²) — расстояние в плоскости XY.
- *
- * 4. Запрещенные зоны: точка не должна попадать в ранее определенные зоны.
- *
- * Если хотя бы одна проверка не проходит, метод возвращает false
- * и записывает описание ошибки в lastError.
- */
-bool SafetyChecker::checkLinkSafety(const Vec3 &jointA, const Vec3 &jointB, int linkIdx) {
-    if (linkIdx < 0 || linkIdx >= MAX_LINKS) return true;
+    // ШАГ 0: math → servo (прибавляем home offset).
+    // Пример: q_math = 0 → servoAngle = 135° (P1) или 90° (P4).
+    float servoAngle = angle + configs[servoId].homeOffset;
 
-    // Для виртуального 7-го звена (палец захватчика) используем zMin звена 5,
-    // так как палец является продолжением последнего реального звена
-    float zMin = (linkIdx < 6) ? linkSafety.zMin[linkIdx] : linkSafety.zMin[5];
+    // ШАГ 1: применение корректирующего множителя.
+    // correctionFactor = 100.0 → без коррекции
+    // correctionFactor = 105.0 → угол увеличивается на 5%
+    float correction = configs[servoId].correctionFactor / 100.0f;
+    float correctedAngle = servoAngle * correction;
 
-    // Количество точек для сэмплирования вдоль звена
-    const int SAMPLES = 5;
-    for (int s = 0; s <= SAMPLES; s++) {
-        float t = (float)s / SAMPLES;
-        Vec3 point = sampleOnLink(jointA, jointB, t);
+    // ШАГ 2: инвертирование направления для зеркально установленных серво.
+    if (configs[servoId].isInverted) {
+        correctedAngle = -correctedAngle;
+    }
 
-        // Проверка 1: минимальная высота Z для данного звена
-        if (point.z < zMin) {
-            lastError = "Link " + String(linkIdx) +
-                        " Z=" + String(point.z, 1) + " < Z_MIN=" + String(zMin, 1);
-            return false;
-        }
+    // ШАГ 3: ограничение угла в СЕРВО-диапазоне (после offset).
+    // minAngle/maxAngle в config.h — математические, поэтому здесь
+    // смещаем границы на homeOffset для получения фактического
+    // физического диапазона сервы.
+    float servoMin = (float)configs[servoId].minAngle + configs[servoId].homeOffset;
+    float servoMax = (float)configs[servoId].maxAngle + configs[servoId].homeOffset;
+    correctedAngle = constrain(correctedAngle, servoMin, servoMax);
 
-        // Проверка 2: границы рабочей области
-        if (!insideWorkspace(point)) {
-            lastError = "Link " + String(linkIdx) +
-                        " outside workspace at (" + String(point.x, 1) + ", " +
-                        String(point.y, 1) + ", " + String(point.z, 1) + ")";
-            return false;
-        }
+    // ШАГ 4: конвертация угла в ширину PWM-импульса (тики PCA9685).
+    // angleToPulse() также смещает границы на homeOffset внутри.
+    uint16_t pulse = angleToPulse(servoId, correctedAngle);
 
-        // Проверка 3: цилиндрический радиус дотягивания (расстояние от оси Z основания)
-        float reachXY = sqrt(point.x * point.x + point.y * point.y);
-        if (reachXY > linkSafety.maxReach) {
-            lastError = "Link " + String(linkIdx) +
-                        " reach=" + String(reachXY, 1) + " > MAX=" + String(linkSafety.maxReach, 1);
-            return false;
-        }
-        if (reachXY < linkSafety.minReach) {
-            lastError = "Link " + String(linkIdx) +
-                        " reach=" + String(reachXY, 1) + " < MIN=" + String(linkSafety.minReach, 1);
-            return false;
-        }
-
-        // Проверка 4: запрещенные зоны
-        if (insideForbiddenZone(point)) {
-            lastError = "Link " + String(linkIdx) +
-                        " in forbidden zone at (" + String(point.x, 1) + ", " +
-                        String(point.y, 1) + ", " + String(point.z, 1) + ")";
-            return false;
+    // ШАГ 5: запись PWM-значения в канал PCA9685.
+    // Каналы 0–5 — сервоприводы 6DOF, канал 6 — захватчик.
+    if (pca9685Available) {
+        if (servoId < 6) {
+            pwm.setPWM(servoId, 0, pulse);
+        } else {
+            pwm.setPWM(6, 0, pulse);
         }
     }
 
-    return true;
+    // ШАГ 6: сохраняем МАТЕМАТИЧЕСКИЙ угол (без offset и коррекции) —
+    // чтобы FK/IK/safety/display работали в единой системе координат.
+    currentAngles.angles[servoId] = angle;
 }
 
 /**
- * @brief Проверка позиции конечного эффектора.
- * Проверяет только попадание заданной точки в рабочую область
- * и отсутствие в запрещенных зонах. Не проверяет звенья —
- * для этого предназначен метод checkAllLinks().
- * Если проверки отключены (enabled=false), всегда возвращает true.
+ * Последовательная установка углов для всех 7 сервоприводов.
+ * Просто вызывает setAngle() для каждого индекса 0–6.
+ * Углы применяются последовательно, что важно для kinematic chain.
+ *
+ * @param angles — структура с МАТЕМАТИЧЕСКИМИ углами всех серво
  */
-bool SafetyChecker::checkPosition(const Vec3 &pos) const {
-    if (!enabled) return true;
-
-    if (!insideWorkspace(pos)) {
-        return false;
+void ServoController::setAngles(const JointAngles &angles) {
+    for (int i = 0; i < 7; i++) {
+        setAngle(i, angles.angles[i]);
     }
-
-    if (insideForbiddenZone(pos)) {
-        return false;
-    }
-
-    return true;
 }
 
 /**
- * @brief Проверка безопасности всех звеньев для заданной конфигурации.
- *
- * Последовательно выполняет:
- *
- * 1. Прямая кинематика: вычисляет позиции всех 7 сочленений (6 реальных + TCP)
- *    с помощью FKSolver.
- *
- * 2. Проверка радиуса дотягивания для каждого сочленения (индексы 1-6):
- *    Каждое сочленение должно находиться в пределах [minReach, maxReach]
- *    от оси Z основания.
- *
- * 3. Проверка 6 основных звеньев (индексы 0-5):
- *    Для каждого звена (от сочленения i до i+1) вызывается checkLinkSafety(),
- *    которая сэмплирует 5 точек и проверяет Z минимум, границы, радиус и запрещенные зоны.
- *
- * 4. Проверка виртуального 7-го звена (палец захватчика):
- *    Звено от 6-го сочленения до TCP (Tool Center Point).
- *    Палец также должен быть безопасен по всем параметрам.
- *
- * @param q Массив углов 6 сочленений (в градусах)
- * @return true если все звенья безопасны
+ * Возвращает текущие МАТЕМАТИЧЕСКИЕ углы всех сервоприводов.
+ * Значения обновляются при каждом вызове setAngle().
+ * Offset НЕ применён — это «чистая» математика для FK/IK/safety/display.
  */
-bool SafetyChecker::checkAllLinks(const float q[6]) {
-    if (!enabled) return true;
+JointAngles ServoController::getCurrentAngles() {
+    return currentAngles;
+}
 
-    // Вычисляем позиции всех сочленений с помощью прямой кинематики
-    Vec3 joints[7];
-    fkSolver.getAllJointPositions(q, joints);
-
-    // Проверка радиуса дотягивания для каждого сочленения (1-6)
-    // Соединение 0 (основание) находится на оси, его не проверяем
-    for (int i = 1; i <= 6; i++) {
-        float reachXY = sqrt(joints[i].x * joints[i].x + joints[i].y * joints[i].y);
-        if (reachXY > linkSafety.maxReach) {
-            lastError = "Joint " + String(i) + " reach=" + String(reachXY, 1) +
-                        " > MAX=" + String(linkSafety.maxReach, 1);
-            return false;
-        }
-        if (reachXY < linkSafety.minReach) {
-            lastError = "Joint " + String(i) + " reach=" + String(reachXY, 1) +
-                        " < MIN=" + String(linkSafety.minReach, 1);
-            return false;
-        }
-    }
-
-    // Проверка каждого из 6 основных звеньев (от сочленения i до i+1)
-    // Каждое звено проверяется по 5 точкам на Z минимум, границы, радиус и запрещенные зоны
-    for (int i = 0; i < 6; i++) {
-        if (!checkLinkSafety(joints[i], joints[i + 1], i)) {
-            return false;
-        }
-    }
-
-    // Проверка виртуального 7-го звена: палец захватчика (от 6-го сочленения до TCP)
-    Vec3 tcp = fkSolver.getEndEffector(q);
-    if (!checkLinkSafety(joints[6], tcp, 6)) {
-        return false;
-    }
-
-    return true;
+const ServoConfig& ServoController::getConfig(int servoId) const {
+    return configs[servoId];
 }
 
 /**
- * @brief Проверка безопасной траектории между двумя конфигурациями.
- *
- * Линейно интерполирует углы сочленений между qStart и qEnd
- * и проверяет безопасность всего манипулятора в каждом промежуточном шаге.
- *
- * Алгоритм:
- * 1. Делит траекторию на steps промежуточных шагов (по умолчанию 20)
- * 2. Для каждого шага вычисляет углы: q = qStart + (qEnd - qStart) * t
- * 3. Вызывает checkAllLinks(q) для проверки безопасности в этой точке
- * 4. Если хотя бы одна точка небезопасна — возвращает false
- *
- * Это гарантирует, что между безопасными начальной и конечной позициями
- * нет столкновений на промежуточных этапах движения.
- *
- * @param qStart Начальные углы (6 сочленений)
- * @param qEnd Конечные углы (6 сочленений)
- * @param steps Количество промежуточных шагов (по умолчанию 20)
- * @return true если вся траектория безопасна
+ * Включение сервоприводов.
+ * После вызова все последующие setAngle() будут выдавать ШИМ-сигнал.
  */
-bool SafetyChecker::checkTrajectory(const float qStart[6], const float qEnd[6], int steps) {
-    if (!enabled) return true;
+void ServoController::enable() {
+    enabled = true;
+}
 
-    for (int step = 0; step <= steps; step++) {
-        float t = (float)step / steps;
-        float q[6];
-
-        // Линейная интерполяция углов для текущего шага
-        for (int i = 0; i < 6; i++) {
-            q[i] = qStart[i] + (qEnd[i] - qStart[i]) * t;
-        }
-
-        // Проверка всех звеньев для текущей промежуточной конфигурации
-        if (!checkAllLinks(q)) {
-            lastError = "Collision at step " + String(step) + "/" + String(steps) +
-                        ": " + lastError;
-            return false;
+/**
+ * Отключение сервоприводов.
+ *
+ * 1. Устанавливает enabled = false — дальнейшие setAngle() игнорируются.
+ * 2. Обнуляет PWM на всех 7 каналах: pwm.setPWM(i, 0, 0).
+ *    При on=0, off=0 сигнал на выходе канала постоянно LOW —
+ *    сервопривод получает питание, но управляющий импульс отсутствует.
+ *    Серво «разжимается» и удерживает текущую позицию без усилия.
+ */
+void ServoController::disable() {
+    enabled = false;
+    // Отключаем PWM на всех каналах — серво переходят в состояние покоя
+    if (pca9685Available) {
+        for (int i = 0; i < 7; i++) {
+            pwm.setPWM(i, 0, 0);
         }
     }
+}
 
-    return true;
+/**
+ * Конвертация СЕРВО-угла (градусы) в ширину PWM-импульса (тики PCA9685).
+ *
+ * ВАЖНО (Last modify: 2026-09-25): angle приходит как СЕРВО-угол
+ * (уже после homeOffset). Границы minAngle/maxAngle в конфиге —
+ * МАТЕМАТИЧЕСКИЕ, поэтому внутри функции они смещаются на homeOffset:
+ *
+ *   servoMinAngle = minAngle + homeOffset
+ *   servoMaxAngle = maxAngle + homeOffset
+ *
+ * ШАГ 1: Линейная интерполяция угла → микросекунды.
+ *   Формула:
+ *     pulse_us = minPWM + (angle - servoMinAngle) * (maxPWM - minPWM)
+ *                       / (servoMaxAngle - servoMinAngle)
+ *
+ *   где:
+ *     minPWM, maxPWM         — ширина импульса в мкс для предельных углов
+ *     servoMinAngle, servoMaxAngle — предельные СЕРВО-углы в градусах
+ *
+ *   Пример для 270°-сервы (P1):
+ *     minAngle = -135, maxAngle = +135, homeOffset = 135
+ *     servoMinAngle = 0, servoMaxAngle = 270
+ *     minPWM = 500, maxPWM = 2500
+ *     angle (servo) = 135 → pulse_us = 500 + (135 - 0) * 2000 / 270 = 1500 мкс
+ *
+ * ШАГ 2: Ограничение результата допустимым диапазоном PWM.
+ *
+ * ШАГ 3: Конвертация микросекунд в тики PCA9685.
+ *   PCA9685 генерирует ШИМ с частотой 50 Гц:
+ *     Период = 1/50 = 0.02 с = 20000 мкс
+ *     Разрешение = 12 бит = 4096 тиков за период
+ *     1 тик = 20000 / 4096 ≈ 4.8828 мкс
+ *
+ *   Формула конвертации:
+ *     ticks = pulse_us * 4096 / 20000
+ *
+ *   Результат: 16-битное беззнаковое число (0–4096).
+ *
+ * @param servoId  индекс сервопривода (для доступа к конфигурации)
+ * @param angle    СЕРВО-угол в градусах (уже с homeOffset)
+ * @return         значение тиков для регистра ON/OFF PCA9685
+ */
+uint16_t ServoController::angleToPulse(int servoId, float angle) {
+    // Извлечение параметров сервопривода из конфигурации
+    float minPWM = configs[servoId].minPWM;
+    float maxPWM = configs[servoId].maxPWM;
+
+    // ВАЖНО: angle приходит как СЕРВО-угол (после offset),
+    // поэтому границы тоже смещаем на homeOffset.
+    float servoMinAngle = (float)configs[servoId].minAngle + configs[servoId].homeOffset;
+    float servoMaxAngle = (float)configs[servoId].maxAngle + configs[servoId].homeOffset;
+
+    // Линейная интерполяция: СЕРВО-угол → ширина импульса в микросекундах
+    float pulse = minPWM + (angle - servoMinAngle) * (maxPWM - minPWM)
+                          / (servoMaxAngle - servoMinAngle);
+    pulse = constrain(pulse, (float)minPWM, (float)maxPWM);
+
+    // Конвертация микросекунд в тики PCA9685.
+    // Период ШИМ = 20000 мкс, разрешение = 4096 тиков.
+    // 1 тик = 20000 / 4096 ≈ 4.8828 мкс.
+    // Формула: ticks = pulse_us / (20000 / 4096) = pulse_us * 4096 / 20000
+    return (uint16_t)(pulse * 4096.0f / 20000.0f);
 }
