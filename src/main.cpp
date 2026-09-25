@@ -1,5 +1,4 @@
-/**
- * Project     : 6DOF arm
+/* Project     : 6DOF arm
  * Author      : Vladimir V. Laykov aka Yago
  * Group       :
  * Mentor      : Lipko I.Y.
@@ -17,11 +16,11 @@
  *   SCL  → GPIO 22
  *   VCC  → 5V (внешнее питание сервоприводов!)
  *   GND  → GND
- *   V+   → адаптер питания сервоприводов (отдельный от ESP32!)
+ *   V+   → адаптер питания сервоприводов (отдельный от ESP32!) 3-12V 10A
  *
  * ST7789 1.54" (дисплей) — SPI (VSPI):
- *   MOSI → GPIO 23
- *   SCK  → GPIO 18
+ *   MOSI/SDA → GPIO 23
+ *   SCK/SCL  → GPIO 18
  *   CS   → GPIO 5
  *   DC   → GPIO 2
  *   RST  → GPIO 4
@@ -36,13 +35,13 @@
  * =====================================================================
  * Распиновка сервоприводов (PCA9685 каналы):
  * =====================================================================
- *   Канал 0  → Joint 1 (Base)        — серва 20кг
- *   Канал 1  → Joint 2 (Shoulder)    — серва 70кг
- *   Канал 2  → Joint 3 (Elbow)       — серва 70кг
- *   Канал 3  → Joint 4 (Wrist Pitch) — MG90S
- *   Канал 4  → Joint 5 (Wrist Roll)  — MG90S
- *   Канал 5  → Joint 6 (Wrist Yaw)   — MG90S
- *   Канал 6  → Gripper               — MG90S
+ *   Канал 0  → Joint 1 (Base)        — серва 20кг DS3218 4.8-6.8V
+ *   Канал 1  → Joint 2 (Shoulder)    — серва 70кг BLS-HV70MG 4.8-8.4V
+ *   Канал 2  → Joint 3 (Elbow)       — серва 70кг BLS-HV70MG 4.8-8.4V
+ *   Канал 3  → Joint 4 (Wrist Pitch) — серва 2.5кг MG90S 4.8V
+ *   Канал 4  → Joint 5 (Wrist Roll)  — серва 2.5кг MG90S 4.8V
+ *   Канал 5  → Joint 6 (Wrist Yaw)   — серва 2.5кг MG90S 4.8V
+ *   Канал 6  → Gripper               — серва 2.5кг MG90S 4.8V
  *
  * =====================================================================
  * Архитектура FreeRTOS на двух ядрах:
@@ -86,7 +85,10 @@
  */
 
 #include <Arduino.h>
-#include <TFT_eSPI.h>
+// #include <TFT_eSPI.h>
+#include <Adafruit_ST7789.h>
+#include <Adafruit_GFX.h>
+#include <SPI.h>
 #include <cmath>
 #include "config.h"
 #include "types.h"
@@ -100,6 +102,13 @@
 #include "safety_checker.h"
 #include "gripper_controller.h"
 #include "eeprom_storage.h"
+
+// Пины SPI для ST7789
+#define TFT_MOSI 23
+#define TFT_SCLK 18
+#define TFT_CS    5
+#define TFT_DC    2
+#define TFT_RST   4
 
 // ===== Глобальные объекты =====
 // Все объекты создаются глобально для доступа из задач FreeRTOS
@@ -179,7 +188,7 @@ SemaphoreHandle_t angleMutex = NULL;
 
 // ===== Дисплей ST7789 =====
 // Экран 1.54" 240×240, SPI (VSPI), пины: MOSI=23, SCK=18, CS=5, DC=2, RST=4
-TFT_eSPI tft = TFT_eSPI();
+Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
 
 // ===== Структура общего состояния для дисплея =====
 // Заполняется Core0 (callback интерполятора + обработчики команд)
@@ -219,7 +228,7 @@ void onInterpolationStep(const JointAngles &angles);  // Callback интерпо
  * G0 — перемещение (быстрое).
  * Поддерживает три режима:
  *   IK_MODE       — задаётся позиция (X, Y, Z) и ориентация (A, B, C),
-//                    вычисляются углы через обратную кинематику.
+ *                    вычисляются углы через обратную кинематику.
  *   DIRECT_MODE   — задаются углы сервоприводов (P1..P7) напрямую.
  *   MIXED_MODE    — комбинация: IK + ручное перекрытие отдельных сервоприводов.
  *
@@ -886,8 +895,8 @@ void core0Task(void *pvParameters) {
  */
 void core1Task(void *pvParameters) {
     // Инициализация дисплея на Core 1 (SPI отдельный поток)
-    displayInit();
-
+    // displayInit();
+    Serial.println("[Core1] Display task started");
     while (true) {
         // Обновление дисплея каждые200мс
         displayUpdate();
@@ -924,19 +933,9 @@ void setup() {
     // Если I2C зависнет — дисплей уже работает и покажет статус
     displayInit();
     
-    // Вывод "6DOF" на экран (большие буквы)
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setTextSize(3);  // Крупный шрифт
-    tft.setCursor(40, 80);
-    tft.println("  6DOF");
-    tft.setTextSize(1);  // Возвращаем обычный размер
-    tft.setCursor(20, 120);
-    tft.setTextColor(TFT_CYAN, TFT_BLACK);
-    tft.println("Initializing...");
-
     Serial.println("=== 6-DOF Robot Arm Controller ===");
     Serial.println("ESP32 @ 240 MHz, PCA9685, 7 servos");
-
+    
     // Инициализация модулей
     servoCtrl.init();                   // PCA9685, I2C, ШИМ-каналы
     servoCtrl.setConfig(config.servos); // Установка ограничений сервоприводов
@@ -1046,32 +1045,32 @@ void onInterpolationStep(const JointAngles &angles) {
 // ====================================================================
 
 // Цвета
-#define COLOR_ZONE_HEADER_BG  TFT_NAVY
-#define COLOR_ZONE_HEADER_FG  TFT_CYAN
-#define COLOR_FIELD_LABEL     TFT_WHITE
-#define COLOR_TCP             TFT_GREEN
-#define COLOR_JOINT           TFT_YELLOW
+#define COLOR_ZONE_HEADER_BG  0x000F
+#define COLOR_ZONE_HEADER_FG  ST77XX_CYAN
+#define COLOR_FIELD_LABEL     ST77XX_WHITE
+#define COLOR_TCP             ST77XX_GREEN
+#define COLOR_JOINT           ST77XX_YELLOW
 #define COLOR_GRIPPER         0xFDA0  // оранжевый
-#define COLOR_READY           TFT_GREEN
-#define COLOR_MOVING          TFT_YELLOW
-#define COLOR_ERROR           TFT_RED
+#define COLOR_READY           ST77XX_GREEN
+#define COLOR_MOVING          ST77XX_YELLOW
+#define COLOR_ERROR           ST77XX_RED
 
-// Шрифт: Font 2 (16px высота строки)
+// Шрифт: setTextSize(2) = 16px высота строки
 #define FONT_HEIGHT  16
 #define ZONE_GAP     4   // отступ между зонами
 
 // Координаты зон (Y начала)
 #define ZONE_TCP_Y      0
-#define ZONE_TCP_H      56     // 12 header + 3×14 строки
-#define ZONE_JOINTS_Y   60
-#define ZONE_JOINTS_H   92     // 12 header + 6×14 строки
-#define ZONE_GRIPPER_Y  156
-#define ZONE_GRIPPER_H  36     // 12 header + 14 строка + 12 bar
-#define ZONE_STATUS_Y   196
-#define ZONE_STATUS_H   44     // 2 строки ×14 + отступы
+#define ZONE_TCP_H      56     // 16 header + 3×16 строки (чуть меньше)
+#define ZONE_JOINTS_Y   56
+#define ZONE_JOINTS_H   112    // 16 header + 6×16 строки
+#define ZONE_GRIPPER_Y  168
+#define ZONE_GRIPPER_H  32     // 16 header + 16 строка
+#define ZONE_STATUS_Y   200
+#define ZONE_STATUS_H   40     // 2 строки ×16 + отступы
 
-// Поля для zone header: высота 12px
-#define HEADER_H  12
+// Поля для zone header: высота 16px
+#define HEADER_H  16
 
 // ====================================================================
 // Дисплей: вспомогательные функции отрисовки
@@ -1103,18 +1102,18 @@ static void drawField(int y, const char *label, float value, float &lastVal,
     lastVal = value;
 
     // Название влево (белый)
-    tft.setTextColor(COLOR_FIELD_LABEL, TFT_BLACK);
+    tft.setTextColor(COLOR_FIELD_LABEL, ST77XX_BLACK);
     tft.setCursor(4, y);
     tft.print(label);
 
     // Очистка старого значения (чёрный прямоугольник справа)
-    tft.fillRect(140, y, 100, FONT_HEIGHT, TFT_BLACK);
+    tft.fillRect(140, y, 100, FONT_HEIGHT, ST77XX_BLACK);
 
     // Новое число вправо
     char buf[16];
     snprintf(buf, sizeof(buf), "%6.1f%s", value, unit);
-    int textW = tft.textWidth(buf);
-    tft.setTextColor(color, TFT_BLACK);
+    int textW = strlen(buf) * 6 * 2;
+    tft.setTextColor(color, ST77XX_BLACK);
     tft.setCursor(236 - textW, y);
     tft.print(buf);
 }
@@ -1129,13 +1128,26 @@ static void drawField(int y, const char *label, float value, float &lastVal,
  * Вызывается один раз из Core1 при старте.
  */
 void displayInit() {
-    tft.init();
-    tft.setRotation(0);        // Квадратный — поворот не важен
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextFont(2);        // Шрифт 2 (16px)
+    tft.init(240, 240);        // Размер экрана 240×240
+    tft.setRotation(2);        // 0 = как есть, 2 = поворот на 180°
+    tft.fillScreen(ST77XX_BLACK);
+
+    // Вывод "6DOF" на экран (большие буквы)
+    tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
+    tft.setTextSize(3);  // Крупный шрифт
+    tft.setCursor(40, 80);
+    tft.println("  6DOF");
+    tft.setTextSize(2);  // Возвращаем обычный размер
+    tft.setCursor(20, 120);
+    tft.setTextColor(ST77XX_CYAN, ST77XX_BLACK);
+    tft.println(" Initializing...");
+    delay(5000);
+    tft.fillScreen(ST77XX_BLACK);
+
+    tft.setTextSize(2);        // Размер шрифта 2 (16px)
 
     // Начальная отрисовка заголовков зон и пустых полей
-    drawZoneHeader(ZONE_TCP_Y, "TCP POSITION");
+    drawZoneHeader(ZONE_TCP_Y, "TCP POS.");
     drawZoneHeader(ZONE_JOINTS_Y, "JOINTS");
     drawZoneHeader(ZONE_GRIPPER_Y, "GRIPPER");
 
@@ -1146,6 +1158,7 @@ void displayInit() {
     for (int i = 0; i < 3; i++) lastTCP[i] = 9999;
     for (int i = 0; i < 7; i++) lastJoints[i] = 9999;
     lastGrip = -1;
+     tft.setTextSize(1); 
 }
 
 /**
@@ -1168,9 +1181,9 @@ void displayUpdate() {
     // === TCP Position Zone ===
     drawField(ZONE_TCP_Y + HEADER_H + 0,  " X:", state.tcpPosition.x,
               lastTCP[0], COLOR_TCP, "mm");
-    drawField(ZONE_TCP_Y + HEADER_H + 14, " Y:", state.tcpPosition.y,
+    drawField(ZONE_TCP_Y + HEADER_H + 16, " Y:", state.tcpPosition.y,
               lastTCP[1], COLOR_TCP, "mm");
-    drawField(ZONE_TCP_Y + HEADER_H + 28, " Z:", state.tcpPosition.z,
+    drawField(ZONE_TCP_Y + HEADER_H + 32, " Z:", state.tcpPosition.z,
               lastTCP[2], COLOR_TCP, "mm");
 
     // === Joints Zone ===
@@ -1179,7 +1192,7 @@ void displayUpdate() {
         " Wrist R:", " Wrist Y:", " Grip:"
     };
     for (int i = 0; i < 6; i++) {
-        drawField(ZONE_JOINTS_Y + HEADER_H + i * 14,
+        drawField(ZONE_JOINTS_Y + HEADER_H + i * 16,
                   jointNames[i], state.servoAngles[i],
                   lastJoints[i], COLOR_JOINT, "°");
     }
@@ -1197,32 +1210,32 @@ void displayUpdate() {
     // Левая часть: статус (READY / MOVING / ERROR)
     tft.setCursor(4, ZONE_STATUS_Y + 4);
     if (error) {
-        tft.setTextColor(COLOR_ERROR, TFT_BLACK);
+        tft.setTextColor(COLOR_ERROR, ST77XX_BLACK);
         tft.print("! ERROR  ");
     } else if (moving) {
-        tft.setTextColor(COLOR_MOVING, TFT_BLACK);
+        tft.setTextColor(COLOR_MOVING, ST77XX_BLACK);
         tft.print("> MOVING ");
     } else {
-        tft.setTextColor(COLOR_READY, TFT_BLACK);
+        tft.setTextColor(COLOR_READY, ST77XX_BLACK);
         tft.print("  READY  ");
     }
 
     // Правая часть: Safety + команда
     tft.setCursor(4, ZONE_STATUS_Y + 20);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
     tft.print("Safety:");
-    tft.setTextColor(safety ? TFT_GREEN : TFT_RED, TFT_BLACK);
+    tft.setTextColor(safety ? ST77XX_GREEN : ST77XX_RED, ST77XX_BLACK);
     tft.print(safety ? " ON" : "OFF");
 
     tft.setCursor(130, ZONE_STATUS_Y + 20);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
     tft.print("Cmd:");
-    tft.setTextColor(TFT_CYAN, TFT_BLACK);
+    tft.setTextColor(ST77XX_CYAN, ST77XX_BLACK);
     tft.print(cmdCount);
 
     // Нижняя строка: версия
     tft.setCursor(4, ZONE_STATUS_Y + 34);
-    tft.setTextColor(0x8410, TFT_BLACK);  // серый
+    tft.setTextColor(0x8410, ST77XX_BLACK);  // серый
     tft.print("6DOF v1.0");
 }
 
