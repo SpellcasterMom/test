@@ -417,7 +417,24 @@ void handleM105(GCodeCommand &cmd) {
  * M114 — вывод текущей позиции энд-эффектора (FK).
  */
 void handleM114(GCodeCommand &cmd) {
-    printPosition();
+    float q[6];
+    for (int i = 0; i < 6; i++) q[i] = currentAngles.angles[i];
+
+    // Позиции всех 7 сочленений
+    Vec3 joints[7];
+    fkSolver.getAllJointPositions(q, joints);
+    for (int i = 0; i < 7; i++) {
+        Serial.printf("J%d: X=%.1f Y=%.1f Z=%.1f\n", i,
+                      joints[i].x, joints[i].y, joints[i].z);
+    }
+
+    // Направление пальца
+    Vec3 dir = fkSolver.getFingerDirection(q);
+    Serial.printf("FingerDir: X=%.3f Y=%.3f Z=%.3f\n", dir.x, dir.y, dir.z);
+
+    // TCP
+    Vec3 tcp = fkSolver.getEndEffector(q);
+    Serial.printf("TCP: X=%.1f Y=%.1f Z=%.1f\n", tcp.x, tcp.y, tcp.z);
 }
 
 /**
