@@ -201,6 +201,7 @@ struct SharedState {
     float       gripperPercent;   // Процент открытия захвата (0-100%)
     bool        isMoving;         // Флаг движения
     bool        safetyEnabled;    // Состояние безопасности
+    bool        pcaReady;         // PCA9685 найден на I2C и инициализирован
     bool        hasError;         // Есть ошибка
     char        lastError[64];    // Текст последней ошибки
     uint32_t    commandCount;     // Счётчик выполненных команд
@@ -891,7 +892,7 @@ void core0Task(void *pvParameters) {
  *   - Обработки кнопок
  *   - Любых фоновых задач, не требующих доступа к Serial
  *
- * Задержка vTaskDelay(100 мс) — достаточно для обновления дисплея
+ * Задержка vTaskDelay(200 мс) — достаточно для обновления дисплея
  * или обработки UI.
  */
 void core1Task(void *pvParameters) {
@@ -940,6 +941,19 @@ void setup() {
     // Инициализация модулей
     servoCtrl.init();                   // PCA9685, I2C, ШИМ-каналы
     servoCtrl.setConfig(config.servos); // Установка ограничений сервоприводов
+
+    // Сохраняем состояние PCA9685 в SharedState (для отображения на дисплее).
+    // servoCtrl.init() выставляет внутренний флаг pca9685Available,
+    // читаем его через геттер isPcaAvailable().
+    xSemaphoreTake(displayMutex, portMAX_DELAY);
+    sharedState.pcaReady = servoCtrl.isPcaAvailable();
+    xSemaphoreGive(displayMutex);
+
+    if (servoCtrl.isPcaAvailable()) {
+        Serial.println("PCA9685: OK (servos active)");
+    } else {
+        Serial.println("PCA9685: NOT FOUND (debug mode, servos disabled)");
+    }
 
     // Связывание интерполятора с зависимостями
     interpolator.setServoController(&servoCtrl);
@@ -1089,37 +1103,32 @@ static void drawZoneHeader(int y, const char *title) {
 }
 
 /**
- * drawField() — рисует поле: название влево, число вправо.
- * Число выровнено по правому краю (240 - padding).
- * lastValue хранится для очистки предыдущего значения (antiflicker).
+ * drawField() — рисует строку: название + число + единица + пробел.
+ * Всё печатается ОДНИМ вызовом tft.print() — быстро и без лишних SPI-транзакций.
+ * Хвостовой пробел стирает старый (более длинный) текст — fillRect не нужен.
+ * lastValue хранится для антифилкера (не перерисовывать при мелких изменениях).
  *
- * Оптимизации:
- *   - убран fillRect под каждым числом (было ~1600 байт × 13 полей = 20 КБ/кадр)
- *   - вместо очистки фона печатается строка фиксированной ширины с пробелом
- *     в конце — setTextColor(fg, bg) сам закрашивает старый хвост
- *   - метка (label) остаётся, но тоже закрашивается фоном автоматически
+ * xLeft  — X-координата начала поля (левая колонка = 4, правая = 124).
+ * xRight — X-координата правого края (число выравнивается вправо).
  */
-static float lastTCP[3] = {9999, 9999, 9999};
+static float lastTCP[6] = {9999, 9999, 9999, 9999, 9999, 9999};
 static float lastJoints[7] = {9999, 9999, 9999, 9999, 9999, 9999, 9999};
 static float lastGrip = -1;
 
-static void drawField(int y, const char *label, float value, float &lastVal,
+static void drawField(int xLeft, int xRight, int y,
+                      const char *label, float value, float &lastVal,
                       uint16_t color, const char *unit, bool forceRedraw = false) {
     if (!forceRedraw && fabs(value - lastVal) < 0.05f) return;
     lastVal = value;
 
-    // Название влево (белый)
-    tft.setTextColor(COLOR_FIELD_LABEL, ST77XX_BLACK);
-    tft.setCursor(4, y);
-    tft.print(label);
-
-    // Новое число вправо. Формат: 6 знаков + единица + пробел в конце —
-    // пробел нужен, чтобы закрасить хвост старого, более длинного значения.
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%6.1f%s ", value, unit);
+    // Одна строка: " P1:  200.0 " — метка + число + единица + пробел
+    char buf[24];
+    snprintf(buf, sizeof(buf), "%s%6.1f%s ", label, value, unit);
     int textW = strlen(buf) * 6 * 2;
-    tft.setTextColor(color, ST77XX_BLACK);
-    tft.setCursor(236 - textW, y);
+
+    tft.setTextSize(2);
+    tft.setTextColor(color, ST77XX_BLACK);   // фон закрашивает старый хвост
+    tft.setCursor(xRight - textW, y);
     tft.print(buf);
 }
 
@@ -1159,14 +1168,10 @@ void displayInit() {
     drawZoneHeader(ZONE_JOINTS_Y, "JOINTS");
     drawZoneHeader(ZONE_GRIPPER_Y, "GRIPPER");
 
-    // Рамка статус-бара
-    tft.drawRect(0, ZONE_STATUS_Y, 240, ZONE_STATUS_H, 0x4208);
-
     // Инициализация last-значений для antiflicker
-    for (int i = 0; i < 3; i++) lastTCP[i] = 9999;
+    for (int i = 0; i < 6; i++) lastTCP[i] = 9999;
     for (int i = 0; i < 7; i++) lastJoints[i] = 9999;
     lastGrip = -1;
-     tft.setTextSize(1); 
 }
 
 /**
@@ -1174,15 +1179,24 @@ void displayInit() {
  * Читает SharedState через displayMutex, рисует только изменившиеся значения.
  * Вызывается из Core1 каждые 200мс.
  *
- * Оптимизация: весь кадр обёрнут в startWrite/endWrite — SPI держится
- * активным между вызовами tft.*, что экономит ~20% времени.
+ * Компоновка (двухколоночная для компактности):
+ *   ┌─TCP POS.──────────────────┐
+ *   │ X:  200.0mm               │
+ *   │ Y:   50.0mm               │
+ *   │ Z:  250.0mm               │
+ *   ├─JOINTS────────────────────┤
+ *   │ P1:   0.0     P4:   0.0   │
+ *   │ P2: -40.0     P5:   0.0   │
+ *   │ P3:   0.0     P6:   0.0   │
+ *   ├─GRIPPER───────────────────┤
+ *   │ G:    50.0%               │
+ *   │                           │
+ *   │  READY       Safety:ON    │
+ *   │              PCA:ON       │
+ *   └───────────────────────────┘
  */
 void displayUpdate() {
     SharedState state;
-    bool moving;
-    bool safety;
-    bool error;
-    uint32_t cmdCount;
 
     // Копирование SharedState под мьютексом
     if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(10)) != pdTRUE) return;
@@ -1192,66 +1206,55 @@ void displayUpdate() {
     // Batch-режим SPI: начало
     tft.startWrite();
 
-    // === TCP Position Zone ===
-    drawField(ZONE_TCP_Y + HEADER_H + 0,  " X:", state.tcpPosition.x,
-              lastTCP[0], COLOR_TCP, "mm");
-    drawField(ZONE_TCP_Y + HEADER_H + 16, " Y:", state.tcpPosition.y,
-              lastTCP[1], COLOR_TCP, "mm");
-    drawField(ZONE_TCP_Y + HEADER_H + 32, " Z:", state.tcpPosition.z,
-              lastTCP[2], COLOR_TCP, "mm");
+    // === TCP Position Zone (3 строки) ===
+    // Левая колонка x=4..118, правая x=124..236
+    drawField(4,   118, ZONE_TCP_Y + HEADER_H + 0,  " X:", state.tcpPosition.x, lastTCP[0], COLOR_TCP, "mm");
+    drawField(4,   118, ZONE_TCP_Y + HEADER_H + 16, " Y:", state.tcpPosition.y, lastTCP[1], COLOR_TCP, "mm");
+    drawField(4,   118, ZONE_TCP_Y + HEADER_H + 32, " Z:", state.tcpPosition.z, lastTCP[2], COLOR_TCP, "mm");
 
-    // === Joints Zone ===
-    const char *jointNames[] = {
-        " Base:", " Shoulder:", " Elbow:", " Wrist P:",
-        " Wrist R:", " Wrist Y:", " Grip:"
-    };
-    for (int i = 0; i < 6; i++) {
-        drawField(ZONE_JOINTS_Y + HEADER_H + i * 16,
-                  jointNames[i], state.servoAngles[i],
-                  lastJoints[i], COLOR_JOINT, "");
-    }
+    // === Joints Zone (3 строки × 2 колонки) ===
+    //  |P1: xxxx    P4: xxxx|
+    //  |P2: xxxx    P5: xxxx|
+    //  |P3: xxxx    P6: xxxx|
+    drawField(4,   118, ZONE_JOINTS_Y + HEADER_H + 0,  " P1:", state.servoAngles[0], lastJoints[0], COLOR_JOINT, "");
+    drawField(124, 236, ZONE_JOINTS_Y + HEADER_H + 0,  " P4:", state.servoAngles[3], lastJoints[3], COLOR_JOINT, "");
 
-    // === Gripper Zone ===
-    drawField(ZONE_GRIPPER_Y + HEADER_H, " Position:",
-              state.gripperPercent, lastGrip, COLOR_GRIPPER, "%");
+    drawField(4,   118, ZONE_JOINTS_Y + HEADER_H + 16, " P2:", state.servoAngles[1], lastJoints[1], COLOR_JOINT, "");
+    drawField(124, 236, ZONE_JOINTS_Y + HEADER_H + 16, " P5:", state.servoAngles[4], lastJoints[4], COLOR_JOINT, "");
 
-    // === Status Bar ===
-    moving = state.isMoving;
-    safety = state.safetyEnabled;
-    error = state.hasError;
-    cmdCount = state.commandCount;
+    drawField(4,   118, ZONE_JOINTS_Y + HEADER_H + 32, " P3:", state.servoAngles[2], lastJoints[2], COLOR_JOINT, "");
+    drawField(124, 236, ZONE_JOINTS_Y + HEADER_H + 32, " P6:", state.servoAngles[5], lastJoints[5], COLOR_JOINT, "");
 
-    // Левая часть: статус (READY / MOVING / ERROR)
+    // === Gripper Zone (1 строка) ===
+    drawField(4, 236, ZONE_GRIPPER_Y + HEADER_H, " G:", state.gripperPercent, lastGrip, COLOR_GRIPPER, "%");
+
+    // === Status Bar (2 строки) ===
+    // Левая часть: статус READY / MOVING / ERROR
+    tft.setTextSize(2);
     tft.setCursor(4, ZONE_STATUS_Y + 4);
-    if (error) {
+    if (state.hasError) {
         tft.setTextColor(COLOR_ERROR, ST77XX_BLACK);
-        tft.print("! ERROR  ");
-    } else if (moving) {
+        tft.print("! ERROR   ");
+    } else if (state.isMoving) {
         tft.setTextColor(COLOR_MOVING, ST77XX_BLACK);
-        tft.print("> MOVING ");
+        tft.print("> MOVING  ");
     } else {
         tft.setTextColor(COLOR_READY, ST77XX_BLACK);
-        tft.print("  READY  ");
+        tft.print("  READY   ");
     }
 
-    // Правая часть: Safety + команда
+    // Нижняя строка: Safety слева, PCA справа
     tft.setCursor(4, ZONE_STATUS_Y + 20);
     tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
     tft.print("Safety:");
-    tft.setTextColor(safety ? ST77XX_GREEN : ST77XX_RED, ST77XX_BLACK);
-    tft.print(safety ? " ON" : "OFF");
+    tft.setTextColor(state.safetyEnabled ? ST77XX_GREEN : ST77XX_RED, ST77XX_BLACK);
+    tft.print(state.safetyEnabled ? "ON " : "OFF");
 
     tft.setCursor(130, ZONE_STATUS_Y + 20);
     tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
-    tft.print("Cmd:");
-    tft.setTextColor(ST77XX_CYAN, ST77XX_BLACK);
-    tft.print(cmdCount);
-    tft.print("   ");   // хвостовой пробел — стирает старые цифры
-
-    // Нижняя строка: версия
-    tft.setCursor(4, ZONE_STATUS_Y + 34);
-    tft.setTextColor(0x8410, ST77XX_BLACK);  // серый
-    tft.print("6DOF v1.0");
+    tft.print("PCA:");
+    tft.setTextColor(state.pcaReady ? ST77XX_GREEN : ST77XX_RED, ST77XX_BLACK);
+    tft.print(state.pcaReady ? "ON " : "OFF");
 
     // Batch-режим SPI: конец
     tft.endWrite();
