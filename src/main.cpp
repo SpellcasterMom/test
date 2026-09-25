@@ -1129,6 +1129,7 @@ static void drawField(int y, const char *label, float value, float &lastVal,
  */
 void displayInit() {
     tft.init(240, 240);        // Размер экрана 240×240
+    tft.setSPISpeed(40000000); 
     tft.setRotation(2);        // 0 = как есть, 2 = поворот на 180°
     tft.fillScreen(ST77XX_BLACK);
 
