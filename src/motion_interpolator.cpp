@@ -19,6 +19,17 @@ MotionInterpolator::MotionInterpolator()
     : servoCtrl(nullptr), backlash(nullptr), safety(nullptr),
       strategy(INTERP_AUTO), stepCallback(nullptr), moving(false) {
     memset(&currentAngles, 0, sizeof(currentAngles));
+    setMark("NONE", "-");
+}
+
+/**
+ * @brief Записать метку последнего движения (для M115).
+ */
+void MotionInterpolator::setMark(const char *mode, const char *note) {
+    strncpy(lastMode, mode, sizeof(lastMode) - 1);
+    lastMode[sizeof(lastMode) - 1] = '\0';
+    strncpy(lastNote, note, sizeof(lastNote) - 1);
+    lastNote[sizeof(lastNote) - 1] = '\0';
 }
 
 void MotionInterpolator::setServoController(ServoController *ctrl) {
@@ -117,6 +128,10 @@ bool MotionInterpolator::interpolateLinear(const JointAngles &target, float feed
     // Проверка безопасности траектории перед началом движения
     if (safety && safety->isEnabled()) {
         if (!safety->checkTrajectory(currentAngles.angles, target.angles, 20)) {
+            char note[64];
+            snprintf(note, sizeof(note), "traj-fail: %.48s",
+                     safety->getLastError().c_str());
+            setMark("LIN", note);
             return false;
         }
     }
@@ -190,6 +205,7 @@ bool MotionInterpolator::interpolateLinear(const JointAngles &target, float feed
             // Если получена команда M112 — немедленная остановка
             if (line.startsWith("M112")) {
                 moving = false;
+                setMark("LIN", "stopped-M112");
                 return false;
             }
         }
@@ -208,6 +224,11 @@ bool MotionInterpolator::interpolateLinear(const JointAngles &target, float feed
     // Финальная позиция: гарантируем точное достижение целевых углов
     if (moving) {
         executeStep(start, target, 1.0f);
+        char note[64];
+        snprintf(note, sizeof(note), "steps=%d timeMs=%.0f", steps, timeMs);
+        setMark("LIN", note);
+    } else {
+        setMark("LIN", "stopped");
     }
 
     return moving;
@@ -239,6 +260,8 @@ bool MotionInterpolator::interpolateLinear(const JointAngles &target, float feed
  * @return true если движение выполнено успешно
  */
 bool MotionInterpolator::interpolateSequential(const JointAngles &target, float feedrate) {
+    int totalSteps = 0;
+    float totalMs = 0;
     for (int i = 0; i < 7; i++) {
         if (!moving) break;
 
@@ -259,6 +282,8 @@ bool MotionInterpolator::interpolateSequential(const JointAngles &target, float 
         float timeMs = (fabs(delta) / (ceiling * pct / 100.0f)) * 1000.0f;
         int steps = (int)(timeMs / STEP_INTERVAL_MS);
         if (steps < 1) steps = 1;
+        totalSteps += steps;
+        totalMs += timeMs;
 
         // Сохранение начального угла для интерполяции
         float startAngle = currentAngles.angles[i];
@@ -280,6 +305,7 @@ bool MotionInterpolator::interpolateSequential(const JointAngles &target, float 
                 line.toUpperCase();
                 if (line.startsWith("M112")) {
                     moving = false;
+                    setMark("SEQ", "stopped-M112");
                     return false;
                 }
             }
@@ -322,6 +348,14 @@ bool MotionInterpolator::interpolateSequential(const JointAngles &target, float 
             // Обновление текущего угла в структуре
             currentAngles.angles[i] = target.angles[i];
         }
+    }
+
+    if (moving) {
+        char note[64];
+        snprintf(note, sizeof(note), "steps=%d timeMs=%.0f", totalSteps, totalMs);
+        setMark("SEQ", note);
+    } else {
+        setMark("SEQ", "stopped");
     }
 
     return moving;

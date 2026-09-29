@@ -107,6 +107,19 @@ public:
      */
     bool isMoving() const;
 
+    /**
+     * @brief Синхронизация внутренних текущих углов (после прямых M104 и т.п.).
+     * Без неё проверка траектории и расчёт времени идут от устаревшей точки,
+     * что даёт ложный фолбэк на sequential и неверную длительность.
+     */
+    void setCurrentAngles(const JointAngles &a) { currentAngles = a; }
+
+    /** Кто ехал последним: "LIN", "SEQ" или "NONE" (движений ещё не было). */
+    const char *getLastMode() const { return lastMode; }
+
+    /** Короткая причина/параметры последнего движения (шаги, время, отказ). */
+    const char *getLastNote() const { return lastNote; }
+
 private:
     ServoController      *servoCtrl;   // Контроллер сервоприводов
     BacklashCompensator  *backlash;    // Компенсатор люфта
@@ -116,6 +129,11 @@ private:
 
     JointAngles currentAngles; // Текущие углы сочленений
     bool        moving;        // Флаг выполняющегося движения
+    char        lastMode[8];   // LIN / SEQ / NONE — кто ехал последним
+    char        lastNote[64];  // шаги/время/причина отказа (для M115)
+
+    /** Записать метку последнего движения (для M115). */
+    void setMark(const char *mode, const char *note);
 
     /**
      * @brief Линейная интерполяция (все сервоприводы одновременно).

@@ -596,6 +596,9 @@ void handleM104(GCodeCommand &cmd) {
             xSemaphoreGive(angleMutex);
         }
     }
+    // Синхронизируем интерполятор: иначе следующий G0 посчитает
+    // траекторию и время от устаревшей точки (ложный фолбэк на SEQ).
+    interpolator.setCurrentAngles(currentAngles);
     diagBegin("DIRECT", 0);
     diagLast.anglesOnly = true;
     diagEvalSol(diagLast.sols[0], currentAngles, cmd.pose);
@@ -653,6 +656,8 @@ void handleM115(GCodeCommand &cmd) {
                   safety.isEnabled() ? "ON" : "OFF",
                   config.fingerLength,
                   absoluteMode ? "ABS" : "REL");
+    Serial.printf("STRAT: %d INTERP: %s %s\n", (int)interpStrategy,
+                  interpolator.getLastMode(), interpolator.getLastNote());
     Vec3 toolDir = diagToolDir(diagLast.target.orientation);
     if (!diagLast.anglesOnly) {
         Serial.printf("TARGET TCP: X=%.1f Y=%.1f Z=%.1f A=%.1f B=%.1f C=%.1f%s\n",
