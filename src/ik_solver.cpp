@@ -46,6 +46,18 @@
 #include <cmath>
 
 // ============================================================================
+// Параметры DLS-уточнения (см. refineSolution)
+// ============================================================================
+// NLS_LAMBDA   — демпфирование (λ² добавляется к диагонали J·Jᵀ)
+// NLS_ORI_W    — вес ориентации в векторе ошибки (1° ≈ 1.7 усл.мм)
+// NLS_DELTA    — шаг численного якобиана (рад)
+// NLS_MAX_STEP — максимальный шаг одного сустава за итерацию (рад)
+static const float NLS_LAMBDA = 0.3f;
+static const float NLS_ORI_W = 100.0f;
+static const float NLS_DELTA = 1e-4f;
+static const float NLS_MAX_STEP = 0.2f;
+
+// ============================================================================
 // КОНСТРУКТОР И ИНИЦИАЛИЗАЦИЯ
 // ============================================================================
 
@@ -72,6 +84,12 @@ IKSolver::IKSolver() {
     }
     // Длина пальца (для смещения TCP → запястье)
     fingerLength = GRIPPER_FINGER_LENGTH;
+    // Параметры численного решателя по умолчанию
+    numMaxIter = 100;
+    numTolPos = 1.0f;
+    numTolOri = 1.0f;
+    // Внутренний FK должен повторять ту же цепочку, что общий fkSolver
+    syncFk();
 }
 
 // ============================================================================
@@ -90,6 +108,7 @@ void IKSolver::setDHParams(const float params[6][4]) {
         alpha[i] = params[i][1];
         d[i]     = params[i][2];
     }
+    syncFk();
 }
 
 /**
@@ -100,6 +119,7 @@ void IKSolver::setDHParams(const float params[6][4]) {
 void IKSolver::setLinkLengths(const int lengths[6]) {
     for (int i = 0; i < 6; i++)
         linkLen[i] = lengths[i];
+    syncFk();
 }
 
 /**
@@ -109,6 +129,36 @@ void IKSolver::setLinkLengths(const int lengths[6]) {
 void IKSolver::setServoLimits(const ServoConfig servos[7]) {
     for (int i = 0; i < 7; i++)
         servoLimits[i] = servos[i];
+}
+
+/**
+ * Настройка численного решателя.
+ *
+ * @param maxIter   — лимит итераций DLS
+ * @param tolPosMM  — допуск по позиции TCP (мм)
+ * @param tolOriDeg — допуск по ориентации (градусы)
+ */
+void IKSolver::setNumericParams(int maxIter, float tolPosMM, float tolOriDeg) {
+    numMaxIter = maxIter;
+    numTolPos = tolPosMM;
+    numTolOri = tolOriDeg;
+}
+
+/**
+ * Протолкнуть DH/длина/палец во внутренний fkSolver, чтобы численное
+ * уточнение работало по ТОЙ ЖЕ цепочке, что общий FK (M114) и safety.
+ */
+void IKSolver::syncFk() {
+    float dh[6][4];
+    for (int i = 0; i < 6; i++) {
+        dh[i][0] = a[i];
+        dh[i][1] = alpha[i];
+        dh[i][2] = d[i];
+        dh[i][3] = 0;
+    }
+    fkSolver.setDHParams(dh);
+    fkSolver.setLinkLengths(linkLen);
+    fkSolver.setFingerLength(fingerLength);
 }
 
 // ============================================================================
@@ -229,6 +279,9 @@ void IKSolver::decomposeRotation(const Mat4 &R, float &q4, float &q5, float &q6)
  * @param target — целевая поза TCP (позиция + ориентация)
  * @param result — массив углов суставов (6 суставов + захват)
  * @return true если решение найдено, false если позиция недостижима
+ *
+ * ЭТАП 3 — refineSolution(): доводка по полной FK-цепочке (DLS),
+ * устраняет ошибку несферического запястья.
  */
 bool IKSolver::solve(const Pose &target, JointAngles &result) {
     float q1, q2, q3, q4, q5, q6;
@@ -273,6 +326,9 @@ bool IKSolver::solve(const Pose &target, JointAngles &result) {
     result.angles[4] = clampAngle(4, q5);  // запястье (yaw)
     result.angles[5] = clampAngle(5, q6);  // запястье (roll)
     result.angles[6] = 0;                  // захват управляется отдельно
+
+    // ЭТАП 3: доводка по полной цепочке (см. refineSolution)
+    refineSolution(target, result, nullptr);
 
     return true;
 }
@@ -475,7 +531,8 @@ bool IKSolver::isReachable(const Pose &target) {
  * @param solutions  — массив найденных решений (максимум 4, но обычно 1–2)
  * @return количество найденных решений (0, 1 или 2)
  */
-int IKSolver::solveAll(const Pose &target, JointAngles solutions[4]) {
+int IKSolver::solveAll(const Pose &target, JointAngles solutions[4],
+                       IKSolutionMeta *meta) {
     int count = 0;
     float q1, q2, q3, q4, q5, q6;
 
@@ -530,6 +587,17 @@ int IKSolver::solveAll(const Pose &target, JointAngles solutions[4]) {
         count++;
     }
 
+    // ================================================================
+    // ЭТАП 3: ЧИСЛЕННОЕ УТОЧНЕНИЕ (DLS)
+    // ================================================================
+    // Запястье НЕ сферическое (вылеты 3×25 мм), поэтому геометрические
+    // решения доводим по полной FK-цепочке. Seed'ы уже в solutions[].
+    for (int i = 0; i < count; i++) {
+        IKSolutionMeta m;
+        refineSolution(target, solutions[i], &m);
+        if (meta) meta[i] = m;
+    }
+
     return count;
 }
 
@@ -548,4 +616,176 @@ float IKSolver::clampAngle(int servoId, float angle) {
     float minA = servoLimits[servoId].minAngle;
     float maxA = servoLimits[servoId].maxAngle;
     return constrain(angle, minA, maxA);
+}
+
+// ============================================================================
+// ВЕКТОР ОШИБКИ ДЛЯ ЧИСЛЕННОГО РЕШАТЕЛЯ
+// ============================================================================
+
+/**
+ * Вектор ошибки 6x1 для конфигурации q (радианы).
+ *
+ * e[0..2] — ошибка позиции TCP (мм): цель минус факт по FK.
+ * e[3..5] — ошибка ориентации × NLS_ORI_W:
+ *   e_o = 0.5 · Σ cross(c_i, t_i), где c_i — столбцы текущей матрицы R,
+ *   t_i — столбцы целевой матрицы Rt (формула Сицилиано).
+ */
+void IKSolver::ikError(const float qrad[6], const Mat4 &Rt, const Vec3 &pt, float e[6]) {
+    float qdeg[6];
+    for (int i = 0; i < 6; i++) qdeg[i] = qrad[i] * RAD_TO_DEG;
+
+    Vec3 p = fkSolver.getEndEffector(qdeg);
+    Mat4 R = fkSolver.getRotationMatrix(qdeg, 5);
+
+    e[0] = pt.x - p.x;
+    e[1] = pt.y - p.y;
+    e[2] = pt.z - p.z;
+
+    float ex = 0.5f * ((R.m[1][0]*Rt.m[2][0] - R.m[2][0]*Rt.m[1][0]) +
+                       (R.m[1][1]*Rt.m[2][1] - R.m[2][1]*Rt.m[1][1]) +
+                       (R.m[1][2]*Rt.m[2][2] - R.m[2][2]*Rt.m[1][2]));
+    float ey = 0.5f * ((R.m[2][0]*Rt.m[0][0] - R.m[0][0]*Rt.m[2][0]) +
+                       (R.m[2][1]*Rt.m[0][1] - R.m[0][1]*Rt.m[2][1]) +
+                       (R.m[2][2]*Rt.m[0][2] - R.m[0][2]*Rt.m[2][2]));
+    float ez = 0.5f * ((R.m[0][0]*Rt.m[1][0] - R.m[1][0]*Rt.m[0][0]) +
+                       (R.m[0][1]*Rt.m[1][1] - R.m[1][1]*Rt.m[0][1]) +
+                       (R.m[0][2]*Rt.m[1][2] - R.m[1][2]*Rt.m[0][2]));
+    e[3] = ex * NLS_ORI_W;
+    e[4] = ey * NLS_ORI_W;
+    e[5] = ez * NLS_ORI_W;
+}
+
+// ============================================================================
+// РЕШЕНИЕ СЛАУ 6x6
+// ============================================================================
+
+/**
+ * Решение СЛАУ A·x = b методом Гаусса с частичным выбором ведущего элемента.
+ *
+ * @return false если матрица вырождена (ведущий элемент ~0).
+ */
+bool IKSolver::solve6(const float A[6][6], const float b[6], float x[6]) {
+    float m[6][7];
+    for (int i = 0; i < 6; i++) {
+        for (int j = 0; j < 6; j++) m[i][j] = A[i][j];
+        m[i][6] = b[i];
+    }
+    for (int col = 0; col < 6; col++) {
+        int piv = col;
+        for (int r = col + 1; r < 6; r++)
+            if (fabs(m[r][col]) > fabs(m[piv][col])) piv = r;
+        if (fabs(m[piv][col]) < 1e-9f) return false;
+        if (piv != col) {
+            for (int k = col; k < 7; k++) {
+                float t = m[col][k]; m[col][k] = m[piv][k]; m[piv][k] = t;
+            }
+        }
+        for (int r = col + 1; r < 6; r++) {
+            float f = m[r][col] / m[col][col];
+            for (int k = col; k < 7; k++) m[r][k] -= f * m[col][k];
+        }
+    }
+    for (int i = 5; i >= 0; i--) {
+        float s = m[i][6];
+        for (int k = i + 1; k < 6; k++) s -= m[i][k] * x[k];
+        x[i] = s / m[i][i];
+    }
+    return true;
+}
+
+// ============================================================================
+// ЧИСЛЕННОЕ УТОЧНЕНИЕ РЕШЕНИЯ (DAMPED LEAST-SQUARES)
+// ============================================================================
+
+/**
+ * Доводка seed-решения по полной FK-цепочке.
+ *
+ * Итерация DLS:
+ *   1) e = ошибка (позиция мм + ориентация × вес), FK — эталон;
+ *   2) J — численный якобиан 6x6 (возмущение NLS_DELTA по каждому суставу);
+ *   3) (J·Jᵀ + λ²I)·y = e  →  dq = Jᵀ·y (шаг обрезан NLS_MAX_STEP);
+ *   4) q += dq с обрезкой по лимитам серв.
+ *
+ * Возвращает лучшее найденное (не обязательно последнее) q.
+ * Захват (angles[6]) не трогается.
+ */
+bool IKSolver::refineSolution(const Pose &target, JointAngles &q, IKSolutionMeta *meta) {
+    if (meta) { meta->iters = 0; meta->converged = false; }
+
+    Mat4 Rt = eulerToMatrix(target.orientation.x * DEG_TO_RAD,
+                            target.orientation.y * DEG_TO_RAD,
+                            target.orientation.z * DEG_TO_RAD);
+    Vec3 pt = target.position;
+
+    float qr[6], qmin[6], qmax[6];
+    for (int i = 0; i < 6; i++) {
+        qr[i] = clampAngle(i, q.angles[i]) * DEG_TO_RAD;
+        qmin[i] = servoLimits[i].minAngle * DEG_TO_RAD;
+        qmax[i] = servoLimits[i].maxAngle * DEG_TO_RAD;
+    }
+
+    float e[6];
+    ikError(qr, Rt, pt, e);
+
+    float bestQr[6], bestN = 0;
+    for (int k = 0; k < 6; k++) bestQr[k] = qr[k];
+    for (int i = 0; i < 6; i++) bestN += e[i] * e[i];
+    bestN = sqrt(bestN);
+
+    float tolOriW = numTolOri * DEG_TO_RAD * NLS_ORI_W;
+    float lam2 = NLS_LAMBDA * NLS_LAMBDA;
+
+    bool converged = false;
+    int it = 0;
+    for (it = 0; it < numMaxIter; it++) {
+        float ep = sqrt(e[0]*e[0] + e[1]*e[1] + e[2]*e[2]);
+        float eo = sqrt(e[3]*e[3] + e[4]*e[4] + e[5]*e[5]);
+        if (ep <= numTolPos && eo <= tolOriW) { converged = true; break; }
+
+        // Численный якобиан: столбец j = (e(q+δj) − e(q)) / δ
+        float J[6][6], e2[6], qp[6];
+        for (int j = 0; j < 6; j++) {
+            for (int k = 0; k < 6; k++) qp[k] = qr[k];
+            qp[j] += NLS_DELTA;
+            ikError(qp, Rt, pt, e2);
+            for (int i = 0; i < 6; i++) J[i][j] = (e2[i] - e[i]) / NLS_DELTA;
+        }
+
+        // DLS: (J·Jᵀ + λ²I)·y = e ; dq = Jᵀ·y
+        float A[6][6], y[6];
+        for (int i = 0; i < 6; i++) {
+            for (int j = 0; j < 6; j++) {
+                float s = (i == j) ? lam2 : 0.0f;
+                for (int k = 0; k < 6; k++) s += J[i][k] * J[j][k];
+                A[i][j] = s;
+            }
+        }
+        if (!solve6(A, e, y)) break;
+
+        for (int k = 0; k < 6; k++) {
+            float s = 0;
+            for (int i = 0; i < 6; i++) s += J[i][k] * y[i];
+            if (s > NLS_MAX_STEP) s = NLS_MAX_STEP;
+            if (s < -NLS_MAX_STEP) s = -NLS_MAX_STEP;
+            qr[k] = constrain(qr[k] + s, qmin[k], qmax[k]);
+        }
+
+        ikError(qr, Rt, pt, e);
+        float n = 0;
+        for (int i = 0; i < 6; i++) n += e[i] * e[i];
+        n = sqrt(n);
+        if (n < bestN) {
+            bestN = n;
+            for (int k = 0; k < 6; k++) bestQr[k] = qr[k];
+        }
+    }
+
+    // Возвращаем лучшее (при несходимости — не последнее, а лучшее)
+    if (!converged)
+        for (int k = 0; k < 6; k++) qr[k] = bestQr[k];
+    for (int i = 0; i < 6; i++)
+        q.angles[i] = clampAngle(i, qr[i] * RAD_TO_DEG);
+
+    if (meta) { meta->iters = it; meta->converged = converged; }
+    return converged;
 }

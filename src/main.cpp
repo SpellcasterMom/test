@@ -220,6 +220,8 @@ struct DiagSol {
     float dOri = 0;         // угол между dir и заданным toolDir (град)
     bool safe = false;      // прошёл safety.checkAllLinks
     char safeErr[48];       // причина отказа safety
+    int iters = 0;          // итераций DLS-уточнения
+    bool converged = false; // DLS сошлось по допускам
     DiagSol() { memset(safeErr, 0, sizeof(safeErr)); }
 };
 
@@ -336,7 +338,8 @@ void handleG0(GCodeCommand &cmd) {
             diagLast.hasPos = cmd.hasPosition;
             diagLast.hasOri = cmd.hasOrientation;
             JointAngles solutions[4];
-            int solCount = ikSolver.solveAll(cmd.pose, solutions);
+            IKSolutionMeta metas[4];
+            int solCount = ikSolver.solveAll(cmd.pose, solutions, metas);
 
             if (solCount == 0) {
                 strncpy(diagLast.failReason, "IK solution not found",
@@ -355,6 +358,8 @@ void handleG0(GCodeCommand &cmd) {
                     solutions[i].angles[6] = cmd.pose.gripper;
                 }
                 diagEvalSol(diagLast.sols[diagLast.solCount], solutions[i], cmd.pose);
+                diagLast.sols[diagLast.solCount].iters = metas[i].iters;
+                diagLast.sols[diagLast.solCount].converged = metas[i].converged;
                 diagLast.solCount++;
             }
 
@@ -649,7 +654,9 @@ void handleM115(GCodeCommand &cmd) {
         }
         Serial.printf("\n    %s", s.safe ? "SAFE:OK" : "SAFE:FAIL");
         if (!s.safe) Serial.printf("(%s)", s.safeErr);
-        Serial.printf(" CLAMP:%s\n", clamp[0] ? clamp : "-");
+        Serial.printf(" CLAMP:%s", clamp[0] ? clamp : "-");
+        if (!diagLast.anglesOnly) Serial.printf(" NLS:%s/%dit", s.converged ? "ok" : "fail", s.iters);
+        Serial.println();
         if (full || i == diagLast.chosen) {
             diagPrintJoints(s.joints);
         }
