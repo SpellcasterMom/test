@@ -24,6 +24,7 @@ void handleG91(GCodeCommand &cmd);
 void handleM104(GCodeCommand &cmd);
 void handleM105(GCodeCommand &cmd);
 void handleM114(GCodeCommand &cmd);
+void handleM115(GCodeCommand &cmd);
 void handleM112(GCodeCommand &cmd);
 
 void handleM400(GCodeCommand &cmd);
@@ -193,6 +194,19 @@ const CommandDef COMMANDS[] = {
         .params = {},
         .paramCount = 0,
         .handler = handleM114,
+    },
+    {
+        .name = "M115",
+        .description = "Kinematics diagnostics: M115 [S=1]",
+        // M115 выводит журнал последнего движения для разбора кинематики:
+        // цель (TARGET), кандидаты IK (SOLS), выбранное решение (CHOSEN),
+        // фактическое положение (ACTUAL) и невязку (RESIDUAL).
+        // Параметр S=1 — полные цепочки J0..J6 для всех кандидатов.
+        .params = {
+            {'S', PARAM_INT, 0, 0},
+        },
+        .paramCount = 1,
+        .handler = handleM115,
     },
     {
         .name = "M112",

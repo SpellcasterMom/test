@@ -206,6 +206,111 @@ void displayUpdate();
 void onInterpolationStep(const JointAngles &angles);
 
 // ====================================================================
+// Журнал последнего движения для M115 (разбор кинематики)
+// ====================================================================
+// Заполняется в handleG0 (G0/G1), handleM104, handleG28.
+// Читается в handleM115. Всё выполняется в задаче core0,
+// поэтому дополнительный мьютекс не нужен.
+struct DiagSol {
+    JointAngles q;          // углы кандидата (6 суставов + захват)
+    Vec3 joints[7];         // FK-цепочка J0..J6
+    Vec3 tcp;               // FK TCP
+    Vec3 dir;               // FK направление пальца
+    float dPos = 0;         // |TCP - TARGET| (мм)
+    float dOri = 0;         // угол между dir и заданным toolDir (град)
+    bool safe = false;      // прошёл safety.checkAllLinks
+    char safeErr[48];       // причина отказа safety
+    DiagSol() { memset(safeErr, 0, sizeof(safeErr)); }
+};
+
+struct DiagLastMove {
+    bool valid = false;
+    char cmdText[48];       // исходный текст команды
+    char kind[8];           // IK / DIRECT / MIXED / HOME / PARK
+    Pose target;            // заданная поза (для IK/MIXED)
+    bool hasPos = false;
+    bool hasOri = false;
+    float feedrate = 0;
+    bool anglesOnly = false;// DIRECT/HOME/PARK: цель — углы, а не TCP
+    int solCount = 0;
+    DiagSol sols[4];
+    int chosen = -1;        // индекс выбранного решения
+    char failReason[64];    // причина отказа (пусто = отказа не было)
+    DiagLastMove() {
+        memset(cmdText, 0, sizeof(cmdText));
+        memset(kind, 0, sizeof(kind));
+        memset(failReason, 0, sizeof(failReason));
+    }
+};
+DiagLastMove diagLast;
+
+// Направление инструмента (ось Z) из углов Эйлера ZYX — та же формула,
+// что IKSolver::eulerToMatrix, третий столбец.
+static Vec3 diagToolDir(const Vec3 &o) {
+    float cr = cos(o.x * DEG_TO_RAD), sr = sin(o.x * DEG_TO_RAD);
+    float cp = cos(o.y * DEG_TO_RAD), sp = sin(o.y * DEG_TO_RAD);
+    float cy = cos(o.z * DEG_TO_RAD), sy = sin(o.z * DEG_TO_RAD);
+    Vec3 d;
+    d.x = cy*sp*cr + sy*sr;
+    d.y = sy*sp*cr - cy*sr;
+    d.z = cp*cr;
+    return d;
+}
+
+// Угол между двумя единичными векторами (градусы).
+static float diagOriErr(const Vec3 &a, const Vec3 &b) {
+    float dot = a.x*b.x + a.y*b.y + a.z*b.z;
+    if (dot > 1.0f) dot = 1.0f;
+    if (dot < -1.0f) dot = -1.0f;
+    return acos(dot) * RAD_TO_DEG;
+}
+
+// Посчитать FK + ошибки + safety для кандидата и положить в DiagSol.
+static void diagEvalSol(DiagSol &s, const JointAngles &q, const Pose &target) {
+    s.q = q;
+    float qq[6];
+    for (int i = 0; i < 6; i++) qq[i] = q.angles[i];
+    fkSolver.getAllJointPositions(qq, s.joints);
+    s.tcp = fkSolver.getEndEffector(qq);
+    s.dir = fkSolver.getFingerDirection(qq);
+    float dx = s.tcp.x - target.position.x;
+    float dy = s.tcp.y - target.position.y;
+    float dz = s.tcp.z - target.position.z;
+    s.dPos = sqrt(dx*dx + dy*dy + dz*dz);
+    s.dOri = diagOriErr(s.dir, diagToolDir(target.orientation));
+    if (!safety.isEnabled()) {
+        s.safe = true;
+        s.safeErr[0] = '\0';
+    } else if (safety.checkAllLinks(qq)) {
+        s.safe = true;
+        s.safeErr[0] = '\0';
+    } else {
+        s.safe = false;
+        strncpy(s.safeErr, safety.getLastError().c_str(), sizeof(s.safeErr) - 1);
+        s.safeErr[sizeof(s.safeErr) - 1] = '\0';
+    }
+}
+
+// Начать новую запись журнала: текст команды берём из sharedState.
+static void diagBegin(const char *kind, float feedrate) {
+    diagLast = DiagLastMove();
+    diagLast.valid = true;
+    xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
+    strncpy(diagLast.cmdText, sharedState.lastCommand, sizeof(diagLast.cmdText) - 1);
+    xSemaphoreGive(displayMutex);
+    strncpy(diagLast.kind, kind, sizeof(diagLast.kind) - 1);
+    diagLast.feedrate = feedrate;
+}
+
+// Печать цепочки суставов J0..J6.
+static void diagPrintJoints(const Vec3 joints[7]) {
+    for (int i = 0; i < 7; i++) {
+        Serial.printf("  J%d: X=%.1f Y=%.1f Z=%.1f\n", i,
+                      joints[i].x, joints[i].y, joints[i].z);
+    }
+}
+
+// ====================================================================
 // Обработчики G-code команд
 // ====================================================================
 
@@ -226,10 +331,16 @@ void handleG0(GCodeCommand &cmd) {
         case GCodeCommand::IK_MODE: {
             // Обратная кинематика: позиция + ориентация → углы суставов
             // Ищем безопасное решение среди всех вариантов (elbow up/down)
+            diagBegin("IK", cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE);
+            diagLast.target = cmd.pose;
+            diagLast.hasPos = cmd.hasPosition;
+            diagLast.hasOri = cmd.hasOrientation;
             JointAngles solutions[4];
             int solCount = ikSolver.solveAll(cmd.pose, solutions);
-            
+
             if (solCount == 0) {
+                strncpy(diagLast.failReason, "IK solution not found",
+                        sizeof(diagLast.failReason) - 1);
                 xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
                 sharedState.hasError = true;
                 snprintf(sharedState.lastError, sizeof(sharedState.lastError), "IK not found");
@@ -237,21 +348,30 @@ void handleG0(GCodeCommand &cmd) {
                 Serial.println("ERROR: IK solution not found");
                 return;
             }
-            
+
+            // Оцениваем каждое решение (FK + ошибки + safety) для M115
+            for (int i = 0; i < solCount && diagLast.solCount < 4; i++) {
+                if (cmd.hasGripper) {
+                    solutions[i].angles[6] = cmd.pose.gripper;
+                }
+                diagEvalSol(diagLast.sols[diagLast.solCount], solutions[i], cmd.pose);
+                diagLast.solCount++;
+            }
+
             // Выбираем первое безопасное решение
             bool foundSafe = false;
-            for (int i = 0; i < solCount; i++) {
-                target = solutions[i];
-                if (cmd.hasGripper) {
-                    target.angles[6] = cmd.pose.gripper;
-                }
-                if (!safety.isEnabled() || safety.checkAllLinks(target.angles)) {
+            for (int i = 0; i < diagLast.solCount; i++) {
+                if (diagLast.sols[i].safe) {
+                    target = diagLast.sols[i].q;
+                    diagLast.chosen = i;
                     foundSafe = true;
                     break;
                 }
             }
-            
+
             if (!foundSafe) {
+                strncpy(diagLast.failReason, "No safe IK solution",
+                        sizeof(diagLast.failReason) - 1);
                 xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
                 sharedState.hasError = true;
                 snprintf(sharedState.lastError, sizeof(sharedState.lastError), "No safe IK");
@@ -263,19 +383,36 @@ void handleG0(GCodeCommand &cmd) {
         }
         case GCodeCommand::DIRECT_MODE: {
             target = cmd.servoAngles;
+            diagBegin("DIRECT", 0);
+            diagLast.anglesOnly = true;
+            diagEvalSol(diagLast.sols[0], target, cmd.pose);
+            diagLast.solCount = 1;
+            diagLast.chosen = 0;
             break;
         }
         case GCodeCommand::MIXED_MODE: {
+            diagBegin("MIXED", cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE);
+            diagLast.target = cmd.pose;
+            diagLast.hasPos = cmd.hasPosition;
+            diagLast.hasOri = cmd.hasOrientation;
+            target = currentAngles;  // страховка: если solve() не найдёт решение,
+                                     // остаёмся на месте, а не едем в мусор
+            bool ikOk = true;
             if (cmd.hasPosition || cmd.hasOrientation) {
-                ikSolver.solve(cmd.pose, target);
-            } else {
-                target = currentAngles;
+                ikOk = ikSolver.solve(cmd.pose, target);
             }
             for (int i = 0; i < 7; i++) {
                 if (cmd.servoOverride[i]) {
                     target.angles[i] = cmd.servoAngles.angles[i];
                 }
             }
+            if (!ikOk && (cmd.hasPosition || cmd.hasOrientation)) {
+                strncpy(diagLast.failReason, "IK solve failed (MIXED moved anyway)",
+                        sizeof(diagLast.failReason) - 1);
+            }
+            diagEvalSol(diagLast.sols[0], target, cmd.pose);
+            diagLast.solCount = 1;
+            diagLast.chosen = 0;
             break;
         }
     }
@@ -283,6 +420,8 @@ void handleG0(GCodeCommand &cmd) {
     // Проверка безопасности
     if (safety.isEnabled()) {
         if (!safety.checkAllLinks(target.angles)) {
+            strncpy(diagLast.failReason, safety.getLastError().c_str(),
+                    sizeof(diagLast.failReason) - 1);
             xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
             sharedState.hasError = true;
             snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Safety");
@@ -314,7 +453,9 @@ void handleG0(GCodeCommand &cmd) {
 
         Serial.println("OK");
     } else {
-        xSemaphoreTake(displayMutex, portMAX_DELAY);
+        strncpy(diagLast.failReason, "Move failed (interpolator)",
+                sizeof(diagLast.failReason) - 1);
+        xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
         sharedState.hasError = true;
         snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Move failed");
         xSemaphoreGive(displayMutex);
@@ -348,6 +489,12 @@ void handleG28(GCodeCommand &cmd) {
         }
     }
 
+    diagBegin(park ? "PARK" : "HOME", 300.0f);
+    diagLast.anglesOnly = true;
+    diagEvalSol(diagLast.sols[0], target, cmd.pose);
+    diagLast.solCount = 1;
+    diagLast.chosen = 0;
+
     if (interpolator.moveTo(target, 300.0f)) {
         xSemaphoreTake(angleMutex, portMAX_DELAY);
         currentAngles = target;
@@ -367,6 +514,8 @@ void handleG28(GCodeCommand &cmd) {
 
         Serial.println(park ? "OK: Parked" : "OK: Home");
     } else {
+        strncpy(diagLast.failReason, park ? "Park failed" : "Home move failed",
+                sizeof(diagLast.failReason) - 1);
         xSemaphoreTake(displayMutex, portMAX_DELAY);
         sharedState.hasError = true;
         snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Park failed");
@@ -403,6 +552,11 @@ void handleM104(GCodeCommand &cmd) {
             xSemaphoreGive(angleMutex);
         }
     }
+    diagBegin("DIRECT", 0);
+    diagLast.anglesOnly = true;
+    diagEvalSol(diagLast.sols[0], currentAngles, cmd.pose);
+    diagLast.solCount = 1;
+    diagLast.chosen = 0;
     Serial.println("OK");
 }
 
@@ -435,6 +589,102 @@ void handleM114(GCodeCommand &cmd) {
     // TCP
     Vec3 tcp = fkSolver.getEndEffector(q);
     Serial.printf("TCP: X=%.1f Y=%.1f Z=%.1f\n", tcp.x, tcp.y, tcp.z);
+}
+
+/**
+ * M115 — разбор кинематики: куда шли (цель), кандидаты IK,
+ * выбранное решение, куда пришли (факт), невязка.
+ * Параметр S=1 — полные цепочки J0..J6 для всех кандидатов.
+ */
+void handleM115(GCodeCommand &cmd) {
+    bool full = cmd.hasParam['S' - 'A'] && (int)cmd.params['S' - 'A'] == 1;
+    Serial.println("=== KIN-DIAG ===");
+    if (!diagLast.valid) {
+        Serial.println("No moves yet");
+        return;
+    }
+    Serial.printf("CMD: %s\n", diagLast.cmdText);
+    Serial.printf("KIND: %s FEED: %.0f SAFETY: %s FINGER: %.1f MODE: %s\n",
+                  diagLast.kind, diagLast.feedrate,
+                  safety.isEnabled() ? "ON" : "OFF",
+                  config.fingerLength,
+                  absoluteMode ? "ABS" : "REL");
+    Vec3 toolDir = diagToolDir(diagLast.target.orientation);
+    if (!diagLast.anglesOnly) {
+        Serial.printf("TARGET TCP: X=%.1f Y=%.1f Z=%.1f A=%.1f B=%.1f C=%.1f%s\n",
+                      diagLast.target.position.x, diagLast.target.position.y,
+                      diagLast.target.position.z, diagLast.target.orientation.x,
+                      diagLast.target.orientation.y, diagLast.target.orientation.z,
+                      diagLast.hasOri ? "" : " (orient=default)");
+        Serial.printf("TARGET wrist: X=%.1f Y=%.1f Z=%.1f toolDir: %.3f %.3f %.3f\n",
+                      diagLast.target.position.x - toolDir.x * config.fingerLength,
+                      diagLast.target.position.y - toolDir.y * config.fingerLength,
+                      diagLast.target.position.z - toolDir.z * config.fingerLength,
+                      toolDir.x, toolDir.y, toolDir.z);
+    } else {
+        Serial.print("TARGET angles:");
+        for (int i = 0; i < 7; i++) {
+            Serial.printf(" P%d=%.1f", i + 1, diagLast.sols[0].q.angles[i]);
+        }
+        Serial.println();
+    }
+    Serial.printf("SOLS: %d\n", diagLast.solCount);
+    for (int i = 0; i < diagLast.solCount; i++) {
+        DiagSol &s = diagLast.sols[i];
+        // Метки углов, сидящих на механических лимитах
+        char clamp[32]; clamp[0] = '\0';
+        for (int j = 0; j < 6; j++) {
+            if (fabs(s.q.angles[j] - config.servos[j].minAngle) < 0.5f ||
+                fabs(s.q.angles[j] - config.servos[j].maxAngle) < 0.5f) {
+                char tmp[8];
+                snprintf(tmp, sizeof(tmp), "P%d ", j + 1);
+                strncat(clamp, tmp, sizeof(clamp) - strlen(clamp) - 1);
+            }
+        }
+        Serial.printf("[%d] q:", i);
+        for (int j = 0; j < 6; j++) Serial.printf(" P%d=%.1f", j + 1, s.q.angles[j]);
+        Serial.printf("\n    TCP: X=%.1f Y=%.1f Z=%.1f", s.tcp.x, s.tcp.y, s.tcp.z);
+        if (!diagLast.anglesOnly) {
+            Serial.printf(" dPos=%.1fmm dOri=%.1fdeg", s.dPos, s.dOri);
+        }
+        Serial.printf("\n    %s", s.safe ? "SAFE:OK" : "SAFE:FAIL");
+        if (!s.safe) Serial.printf("(%s)", s.safeErr);
+        Serial.printf(" CLAMP:%s\n", clamp[0] ? clamp : "-");
+        if (full || i == diagLast.chosen) {
+            diagPrintJoints(s.joints);
+        }
+    }
+    if (diagLast.chosen >= 0) {
+        const char *how = (strcmp(diagLast.kind, "IK") == 0 ||
+                           strcmp(diagLast.kind, "MIXED") == 0) ? "first-safe" : "direct";
+        Serial.printf("CHOSEN: [%d] (%s)\n", diagLast.chosen, how);
+    } else {
+        Serial.printf("FAIL: %s\n", diagLast.failReason);
+    }
+    // Фактическое положение
+    float q[6];
+    for (int i = 0; i < 6; i++) q[i] = currentAngles.angles[i];
+    Vec3 joints[7];
+    fkSolver.getAllJointPositions(q, joints);
+    Vec3 dir = fkSolver.getFingerDirection(q);
+    Vec3 atcp = fkSolver.getEndEffector(q);
+    Serial.print("ACTUAL q:");
+    for (int i = 0; i < 7; i++) Serial.printf(" P%d=%.1f", i + 1, currentAngles.angles[i]);
+    Serial.println();
+    diagPrintJoints(joints);
+    Serial.printf("  DIR: X=%.3f Y=%.3f Z=%.3f\n", dir.x, dir.y, dir.z);
+    Serial.printf("  TCP: X=%.1f Y=%.1f Z=%.1f\n", atcp.x, atcp.y, atcp.z);
+    if (!diagLast.anglesOnly) {
+        float dx = atcp.x - diagLast.target.position.x;
+        float dy = atcp.y - diagLast.target.position.y;
+        float dz = atcp.z - diagLast.target.position.z;
+        float dist = sqrt(dx*dx + dy*dy + dz*dz);
+        Serial.printf("RESIDUAL: dX=%.1f dY=%.1f dZ=%.1f dist=%.1fmm dOri=%.1fdeg%s\n",
+                      dx, dy, dz, dist, diagOriErr(dir, toolDir),
+                      diagLast.hasOri ? "" : " (vs default orient)");
+    } else {
+        Serial.println("RESIDUAL: n/a (angles mode)");
+    }
 }
 
 /**
@@ -677,6 +927,7 @@ void handleHelp(GCodeCommand &cmd) {
     Serial.println("M104 P1=90 P2=0 ..            - Set servo angles directly");
     Serial.println("M105                          - Report servo angles");
     Serial.println("M114                          - Report position (FK)");
+    Serial.println("M115 [S=1]                    - Kinematics diag (target/sols/actual)");
     Serial.println("M112                          - Emergency stop");
     Serial.println("M111                          - Save current as HOME");
     Serial.println("M400 P1=2.0 P2=1.5 ..         - Set backlash compensation");
