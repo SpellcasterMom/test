@@ -222,6 +222,8 @@ struct DiagSol {
     char safeErr[48];       // причина отказа safety
     int iters = 0;          // итераций DLS-уточнения
     bool converged = false; // DLS сошлось по допускам
+    float seedPos = 0;      // невязка позиции у seed'а (мм)
+    float seedOri = 0;      // невязка ориентации у seed'а (град)
     DiagSol() { memset(safeErr, 0, sizeof(safeErr)); }
 };
 
@@ -360,6 +362,8 @@ void handleG0(GCodeCommand &cmd) {
                 diagEvalSol(diagLast.sols[diagLast.solCount], solutions[i], cmd.pose);
                 diagLast.sols[diagLast.solCount].iters = metas[i].iters;
                 diagLast.sols[diagLast.solCount].converged = metas[i].converged;
+                diagLast.sols[diagLast.solCount].seedPos = metas[i].seedPos;
+                diagLast.sols[diagLast.solCount].seedOri = metas[i].seedOri;
                 diagLast.solCount++;
             }
 
@@ -655,7 +659,10 @@ void handleM115(GCodeCommand &cmd) {
         Serial.printf("\n    %s", s.safe ? "SAFE:OK" : "SAFE:FAIL");
         if (!s.safe) Serial.printf("(%s)", s.safeErr);
         Serial.printf(" CLAMP:%s", clamp[0] ? clamp : "-");
-        if (!diagLast.anglesOnly) Serial.printf(" NLS:%s/%dit", s.converged ? "ok" : "fail", s.iters);
+        if (!diagLast.anglesOnly) {
+            Serial.printf(" NLS:%s/%dit", s.converged ? "ok" : "fail", s.iters);
+            if (!s.converged) Serial.printf(" seed=%.1fmm/%.1fdeg", s.seedPos, s.seedOri);
+        }
         Serial.println();
         if (full || i == diagLast.chosen) {
             diagPrintJoints(s.joints);

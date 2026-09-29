@@ -733,10 +733,20 @@ bool IKSolver::refineSolution(const Pose &target, JointAngles &q, IKSolutionMeta
     bestN = sqrt(bestN);
 
     float tolOriW = numTolOri * DEG_TO_RAD * NLS_ORI_W;
-    float lam2 = NLS_LAMBDA * NLS_LAMBDA;
+    float enorm = bestN;
 
+    // Невязка seed'а для диагностики (M115 покажет seed → best)
+    if (meta) {
+        meta->seedPos = sqrt(e[0]*e[0] + e[1]*e[1] + e[2]*e[2]);
+        meta->seedOri = sqrt(e[3]*e[3] + e[4]*e[4] + e[5]*e[5]) / NLS_ORI_W * RAD_TO_DEG;
+    }
+
+    // Левенберг-Марквардт: λ адаптивная, шаг принимается только если
+    // ошибка строго упала (backtracking line search). Без этого шаги
+    // Гаусса-Ньютона перелетают и лучшей остаётся seed-точка.
+    float lam = NLS_LAMBDA;
     bool converged = false;
-    int it = 0;
+    int it = 0, stall = 0;
     for (it = 0; it < numMaxIter; it++) {
         float ep = sqrt(e[0]*e[0] + e[1]*e[1] + e[2]*e[2]);
         float eo = sqrt(e[3]*e[3] + e[4]*e[4] + e[5]*e[5]);
@@ -751,8 +761,9 @@ bool IKSolver::refineSolution(const Pose &target, JointAngles &q, IKSolutionMeta
             for (int i = 0; i < 6; i++) J[i][j] = (e2[i] - e[i]) / NLS_DELTA;
         }
 
-        // DLS: (J·Jᵀ + λ²I)·y = e ; dq = Jᵀ·y
-        float A[6][6], y[6];
+        // DLS-направление: (J·Jᵀ + λ²I)·y = e ; dq = Jᵀ·y
+        float lam2 = lam * lam;
+        float A[6][6], y[6], dq[6];
         for (int i = 0; i < 6; i++) {
             for (int j = 0; j < 6; j++) {
                 float s = (i == j) ? lam2 : 0.0f;
@@ -760,22 +771,48 @@ bool IKSolver::refineSolution(const Pose &target, JointAngles &q, IKSolutionMeta
                 A[i][j] = s;
             }
         }
-        if (!solve6(A, e, y)) break;
-
+        if (!solve6(A, e, y)) {
+            lam = lam * 4.0f; if (lam > 1e4f) lam = 1e4f;
+            if (++stall >= 15) break;
+            continue;
+        }
         for (int k = 0; k < 6; k++) {
             float s = 0;
             for (int i = 0; i < 6; i++) s += J[i][k] * y[i];
             if (s > NLS_MAX_STEP) s = NLS_MAX_STEP;
             if (s < -NLS_MAX_STEP) s = -NLS_MAX_STEP;
-            qr[k] = constrain(qr[k] + s, qmin[k], qmax[k]);
+            dq[k] = s;
         }
 
-        ikError(qr, Rt, pt, e);
-        float n = 0;
-        for (int i = 0; i < 6; i++) n += e[i] * e[i];
-        n = sqrt(n);
-        if (n < bestN) {
-            bestN = n;
+        // Backtracking: пробуем полный шаг, половинки, ... — берём первый,
+        // который строго уменьшил ошибку. Иначе — растим λ и повторяем.
+        float qtry[6], en[6];
+        float step = 1.0f, nn = enorm;
+        bool improved = false;
+        for (int ls = 0; ls < 10; ls++) {
+            for (int k = 0; k < 6; k++)
+                qtry[k] = constrain(qr[k] + dq[k] * step, qmin[k], qmax[k]);
+            ikError(qtry, Rt, pt, en);
+            nn = 0;
+            for (int i = 0; i < 6; i++) nn += en[i] * en[i];
+            nn = sqrt(nn);
+            if (nn < enorm) { improved = true; break; }
+            step *= 0.5f;
+        }
+        if (!improved) {
+            lam = lam * 4.0f; if (lam > 1e4f) lam = 1e4f;
+            if (++stall >= 15) break;
+            continue;
+        }
+
+        // Шаг принят
+        for (int k = 0; k < 6; k++) qr[k] = qtry[k];
+        for (int i = 0; i < 6; i++) e[i] = en[i];
+        enorm = nn;
+        lam = lam * 0.5f; if (lam < 1e-3f) lam = 1e-3f;
+        stall = 0;
+        if (nn < bestN) {
+            bestN = nn;
             for (int k = 0; k < 6; k++) bestQr[k] = qr[k];
         }
     }

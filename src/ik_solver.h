@@ -24,6 +24,8 @@
 struct IKSolutionMeta {
     int iters = 0;          // выполнено итераций DLS
     bool converged = false; // сошлось по допускам (позиция + ориентация)
+    float seedPos = 0;      // невязка позиции у seed'а (мм)
+    float seedOri = 0;      // невязка ориентации у seed'а (град)
 };
 
 /**
