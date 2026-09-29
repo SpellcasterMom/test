@@ -61,7 +61,8 @@ void MotionInterpolator::stop() {
  * После успешного движения обновляет currentAngles на целевые значения.
  *
  * @param target Целевые углы 7 сервоприводов
- * @param feedrate Скорость подачи (градусов/сек для максимального.delta)
+ * @param feedrate Процент от предельной скорости (0-100, >100 = 100%).
+ *               Лимиты серв (maxAngularSpeed) не превышаются никогда.
  * @return true если движение выполнено успешно
  */
 bool MotionInterpolator::moveTo(const JointAngles &target, float feedrate) {
@@ -151,9 +152,15 @@ bool MotionInterpolator::interpolateLinear(const JointAngles &target, float feed
         if (servoTime[i] > maxTime) maxTime = servoTime[i];
     }
     
-    // Применяем feedrate как множитель (100% = норма, 50% = в 2 раза медленнее)
-    if (feedrate > 0 && feedrate != 100.0f) {
-        maxTime = maxTime * (100.0f / feedrate);
+    // Feedrate — процент от предельной скорости (100 = полная скорость
+    // по лимитам серв, 50 = в 2 раза медленнее). Значения >100 обрезаются
+    // до 100: maxAngularSpeed — жёсткий потолок, превышение запрещено.
+    // NOTE: исторически сюда приходили мм/с (500/300) — они мапятся на 100%.
+    // Честный мм/с по TCP требует длины траектории через FK (TODO).
+    float pct = 100.0f;
+    if (feedrate > 0.0f && feedrate < 100.0f) pct = feedrate;
+    if (pct != 100.0f) {
+        maxTime = maxTime * (100.0f / pct);
     }
     
     // Пересчитываем в миллисекунды и количество шагов
@@ -215,7 +222,8 @@ bool MotionInterpolator::interpolateLinear(const JointAngles &target, float feed
  *
  * Алгоритм для каждого сервопривода i (0-6):
  * 1. Проверка изменения угла (если < MIN_STEP_DEG — пропуск)
- * 2. Расчет времени движения на основе feedrate и изменения угла
+ * 2. Расчет времени движения из maxAngularSpeed и изменения угла
+ *    (feedrate ≤100 — только замедление, см. interpolateLinear)
  * 3. Цикл интерполяции для данного сервопривода:
  *    - Проверка флага moving
  *    - Проверка serial порта на M112 (экстренная остановка)
@@ -239,8 +247,16 @@ bool MotionInterpolator::interpolateSequential(const JointAngles &target, float 
         // Если изменение меньше порога — пропускаем этот сервопривод
         if (fabs(delta) < MIN_STEP_DEG) continue;
 
-        // Расчет времени движения (мс)
-        float timeMs = (fabs(delta) / feedrate) * 1000.0f;
+        // Время движения из лимита сервы (maxAngularSpeed — жёсткий потолок),
+        // feedrate ≤100 — процент замедления (см. interpolateLinear).
+        float ceiling = 180.0f;
+        if (servoCtrl) {
+            float lim = servoCtrl->getConfig(i).maxAngularSpeed;
+            if (lim > 0) ceiling = lim;
+        }
+        float pct = 100.0f;
+        if (feedrate > 0.0f && feedrate < 100.0f) pct = feedrate;
+        float timeMs = (fabs(delta) / (ceiling * pct / 100.0f)) * 1000.0f;
         int steps = (int)(timeMs / STEP_INTERVAL_MS);
         if (steps < 1) steps = 1;
 
