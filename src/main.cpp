@@ -331,6 +331,15 @@ void handleG0(GCodeCommand &cmd) {
     sharedState.hasError = false;
     xSemaphoreGive(displayMutex);
 
+    // Эффективная поза: без A/B/C берём дефолт «палец вперёд +Y»
+    // (DEFAULT_ORI_*). M115 покажет её же с пометкой (orient=default).
+    Pose effPose = cmd.pose;
+    if (!cmd.hasOrientation) {
+        effPose.orientation.x = DEFAULT_ORI_A;
+        effPose.orientation.y = DEFAULT_ORI_B;
+        effPose.orientation.z = DEFAULT_ORI_C;
+    }
+
     JointAngles target;
 
     switch (cmd.mode) {
@@ -338,12 +347,12 @@ void handleG0(GCodeCommand &cmd) {
             // Обратная кинематика: позиция + ориентация → углы суставов
             // Ищем безопасное решение среди всех вариантов (elbow up/down)
             diagBegin("IK", cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE);
-            diagLast.target = cmd.pose;
+            diagLast.target = effPose;
             diagLast.hasPos = cmd.hasPosition;
             diagLast.hasOri = cmd.hasOrientation;
             JointAngles solutions[4];
             IKSolutionMeta metas[4];
-            int solCount = ikSolver.solveAll(cmd.pose, solutions, metas);
+            int solCount = ikSolver.solveAll(effPose, solutions, metas);
 
             if (solCount == 0) {
                 strncpy(diagLast.failReason, "IK solution not found",
@@ -361,7 +370,7 @@ void handleG0(GCodeCommand &cmd) {
                 if (cmd.hasGripper) {
                     solutions[i].angles[6] = cmd.pose.gripper;
                 }
-                diagEvalSol(diagLast.sols[diagLast.solCount], solutions[i], cmd.pose);
+                diagEvalSol(diagLast.sols[diagLast.solCount], solutions[i], effPose);
                 diagLast.sols[diagLast.solCount].iters = metas[i].iters;
                 diagLast.sols[diagLast.solCount].converged = metas[i].converged;
                 diagLast.sols[diagLast.solCount].seedPos = metas[i].seedPos;
@@ -414,14 +423,14 @@ void handleG0(GCodeCommand &cmd) {
         }
         case GCodeCommand::MIXED_MODE: {
             diagBegin("MIXED", cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE);
-            diagLast.target = cmd.pose;
+            diagLast.target = effPose;
             diagLast.hasPos = cmd.hasPosition;
             diagLast.hasOri = cmd.hasOrientation;
             target = currentAngles;  // страховка: если solve() не найдёт решение,
                                      // остаёмся на месте, а не едем в мусор
             bool ikOk = true;
             if (cmd.hasPosition || cmd.hasOrientation) {
-                ikOk = ikSolver.solve(cmd.pose, target);
+                ikOk = ikSolver.solve(effPose, target);
             }
             for (int i = 0; i < 7; i++) {
                 if (cmd.servoOverride[i]) {
@@ -440,7 +449,7 @@ void handleG0(GCodeCommand &cmd) {
             {
                 JointAngles tq = target;
                 IKSolutionMeta mm;
-                ikSolver.refineSolution(cmd.pose, tq, &mm);
+                ikSolver.refineSolution(effPose, tq, &mm);
                 diagLast.sols[0].iters = mm.iters;
                 diagLast.sols[0].converged = mm.converged;
                 diagLast.sols[0].seedPos = mm.seedPos;
@@ -526,9 +535,9 @@ void handleG28(GCodeCommand &cmd) {
 
     diagBegin(park ? "PARK" : "HOME", 300.0f);
     diagLast.anglesOnly = true;
-    diagEvalSol(diagLast.sols[0], target, cmd.pose);
-    diagLast.solCount = 1;
-    diagLast.chosen = 0;
+            diagEvalSol(diagLast.sols[0], target, effPose);
+            diagLast.solCount = 1;
+            diagLast.chosen = 0;
 
     if (interpolator.moveTo(target, 300.0f)) {
         xSemaphoreTake(angleMutex, portMAX_DELAY);
@@ -960,8 +969,8 @@ void handleM502(GCodeCommand &cmd) {
  */
 void handleHelp(GCodeCommand &cmd) {
     Serial.println("=== 6-DOF Robot Arm Commands ===");
-    Serial.println("G0 X.. Y.. Z.. A.. B.. C.. J.. - Move (IK/Direct/Mixed)");
-    Serial.println("G1 X.. Y.. Z.. F.. P1=.. P7=.. - Move with feedrate");
+    Serial.println("G0 X.. Y.. Z.. A.. B.. C.. J.. - Move (IK/Direct/Mixed, def A-90=tool+Y)");
+    Serial.println("G1 X.. Y.. Z.. F.. P1=.. P7=.. - Move with feedrate (same defaults)");
     Serial.println("G28                           - Home all axes");
     Serial.println("G28 H1                        - Park (fold into compact position)");
     Serial.println("G90                           - Absolute mode");
