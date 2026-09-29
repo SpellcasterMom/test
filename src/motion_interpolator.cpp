@@ -382,8 +382,23 @@ bool MotionInterpolator::interpolateAuto(const JointAngles &target, float feedra
     // Если M112 сработал во время линейной — не перезапускаем движение
     if (!moving) return false;
 
+    // Запоминаем причину отказа linear: sequential ниже её перезапишет,
+    // а для диагностики (M115) важно знать, почему не поехали прямо.
+    char linNote[64];
+    strncpy(linNote, lastNote, sizeof(linNote) - 1);
+    linNote[sizeof(linNote) - 1] = '\0';
+
     // Если линейная не прошла по безопасности — переключаемся на последовательную
-    return interpolateSequential(target, feedrate);
+    bool ok = interpolateSequential(target, feedrate);
+    if (ok && strncmp(linNote, "traj-fail", 9) == 0) {
+        char seqNote[96];
+        strncpy(seqNote, lastNote, sizeof(seqNote) - 1);
+        seqNote[sizeof(seqNote) - 1] = '\0';
+        char note[96];
+        snprintf(note, sizeof(note), "%s | fbk %.40s", seqNote, linNote);
+        setMark("SEQ", note);
+    }
+    return ok;
 }
 
 /**

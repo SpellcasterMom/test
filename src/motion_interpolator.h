@@ -130,7 +130,7 @@ private:
     JointAngles currentAngles; // Текущие углы сочленений
     bool        moving;        // Флаг выполняющегося движения
     char        lastMode[8];   // LIN / SEQ / NONE — кто ехал последним
-    char        lastNote[64];  // шаги/время/причина отказа (для M115)
+    char        lastNote[96];  // шаги/время/причина отказа (для M115)
 
     /** Записать метку последнего движения (для M115). */
     void setMark(const char *mode, const char *note);
