@@ -724,8 +724,10 @@ bool IKSolver::solve6(const float A[6][6], const float b[6], float x[6]) {
  * Итерация DLS:
  *   1) e = ошибка (позиция мм + ориентация × вес), FK — эталон;
  *   2) J — численный якобиан 6x6 (возмущение NLS_DELTA по каждому суставу);
- *   3) (J·Jᵀ + λ²I)·y = e  →  dq = Jᵀ·y (шаг обрезан NLS_MAX_STEP);
- *   4) q += dq с обрезкой по лимитам серв.
+ *   3) (J·Jᵀ + λ²I)·y = e  →  dq = −Jᵀ·y (МИНУС! шаг против градиента,
+ *      обрезан NLS_MAX_STEP);
+ *   4) q += dq с обрезкой по лимитам серв (line search принимает шаг
+ *      только если ошибка строго упала).
  *
  * Возвращает лучшее найденное (не обязательно последнее) q.
  * Захват (angles[6]) не трогается.
@@ -782,7 +784,10 @@ bool IKSolver::refineSolution(const Pose &target, JointAngles &q, IKSolutionMeta
             for (int i = 0; i < 6; i++) J[i][j] = (e2[i] - e[i]) / NLS_DELTA;
         }
 
-        // DLS-направление: (J·Jᵀ + λ²I)·y = e ; dq = Jᵀ·y.
+        // DLS-направление: (J·Jᵀ + λ²I)·y = e ; dq = −Jᵀ·y.
+        // МИНУС обязателен: минимизируем ||e + J·dq||² + λ²||dq||², т.е.
+        // (JᵀJ + λ²I)·dq = −Jᵀe. Без минуса — подъём вместо спуска:
+        // все шаги бракуются line search и итогом всегда остаётся seed.
         // Active-set: сустав, стоящий на лимите и толкающий наружу,
         // исключаем из задачи (обнуляем столбец J) и пересчитываем dq —
         // иначе зажатое направление душит спуск по свободным суставам.
@@ -801,7 +806,7 @@ bool IKSolver::refineSolution(const Pose &target, JointAngles &q, IKSolutionMeta
             for (int k = 0; k < 6; k++) {
                 float s = 0;
                 for (int i = 0; i < 6; i++) s += J[i][k] * y[i];
-                dq[k] = s;
+                dq[k] = -s;   // МИНУС: шаг против градиента (см. выше)
             }
             int viol = -1;
             const float WEPS = 1e-4f;
