@@ -531,7 +531,9 @@ void handleG28(GCodeCommand &cmd) {
     bool park = cmd.hasParam['H' - 'A'] && (int)cmd.params['H' - 'A'] == 1;
 
     if (park) {
-        target.setAll(0, -60, -90, 0, 0, 0, 0);
+        // Компактная сложенная поза (проверена по FK, см. DEFAULT_HOME_ANGLES).
+        // Старое (0,-60,-90) вело локоть ПОД СТОЛ (Z=-144)!
+        target.setAll(0, 60, -135, 0, 0, 0, 0);
     } else {
         for (int i = 0; i < 7; i++) {
             target.angles[i] = homeAngles.angles[i];
@@ -540,6 +542,20 @@ void handleG28(GCodeCommand &cmd) {
 
     diagBegin(park ? "PARK" : "HOME", 300.0f);
     diagLast.anglesOnly = true;
+
+    // Не едем вслепую: цель паркинга/дома обязана проходить safety.
+    // При выключенной безопасности checkAllLinks всегда true.
+    if (safety.isEnabled() && !safety.checkAllLinks(target.angles)) {
+        strncpy(diagLast.failReason, safety.getLastError().c_str(),
+                sizeof(diagLast.failReason) - 1);
+        xSemaphoreTake(displayMutex, portMAX_DELAY);
+        sharedState.hasError = true;
+        snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Bad home/park");
+        xSemaphoreGive(displayMutex);
+        Serial.print("ERROR: Home/park target unsafe: ");
+        Serial.println(safety.getLastError());
+        return;
+    }
     diagEvalSol(diagLast.sols[0], target, cmd.pose);
     diagLast.solCount = 1;
     diagLast.chosen = 0;
@@ -1176,6 +1192,18 @@ void setup() {
         fkSolver.setFingerLength(config.fingerLength);
         safety.setFingerLength(config.fingerLength);
         Serial.println("Using default config");
+    }
+
+    // Проверка сохранённого дома: битый home (напр. старые нули =
+    // недостижимый вылет 415мм) ломал бы первую проверку траектории.
+    // Откатываемся на дефолт с предупреждением (в EEPROM не пишем).
+    if (!safety.checkAllLinks(homeAngles.angles)) {
+        Serial.print("WARNING: stored HOME unsafe (");
+        Serial.print(safety.getLastError());
+        Serial.println("), using defaults");
+        for (int i = 0; i < 7; i++) {
+            homeAngles.angles[i] = DEFAULT_HOME_ANGLES[i];
+        }
     }
 
     // Стартовая поза после ребута: лучшего знания о железе нет
