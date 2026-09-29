@@ -371,15 +371,24 @@ void handleG0(GCodeCommand &cmd) {
                 diagLast.solCount++;
             }
 
-            // Выбираем первое безопасное решение
-            bool foundSafe = false;
+            // Выбираем безопасное решение с минимальной невязкой:
+            // score = dPos[мм] + 1.0·dOri[град] (вес настраивается).
+            // «Первый безопасный» систематически брал худший вариант
+            // (M115: [0] 2.7мм/23.8° вместо [1] 2.2мм/0.0°).
+            int best = -1;
+            float bestScore = 0;
             for (int i = 0; i < diagLast.solCount; i++) {
-                if (diagLast.sols[i].safe) {
-                    target = diagLast.sols[i].q;
-                    diagLast.chosen = i;
-                    foundSafe = true;
-                    break;
+                if (!diagLast.sols[i].safe) continue;
+                float score = diagLast.sols[i].dPos + diagLast.sols[i].dOri;
+                if (best < 0 || score < bestScore) {
+                    best = i;
+                    bestScore = score;
                 }
+            }
+            bool foundSafe = (best >= 0);
+            if (foundSafe) {
+                target = diagLast.sols[best].q;
+                diagLast.chosen = best;
             }
 
             if (!foundSafe) {
@@ -687,8 +696,9 @@ void handleM115(GCodeCommand &cmd) {
         }
     }
     if (diagLast.chosen >= 0) {
-        const char *how = (strcmp(diagLast.kind, "IK") == 0 ||
-                           strcmp(diagLast.kind, "MIXED") == 0) ? "first-safe" : "direct";
+        const char *how = "direct";
+        if (strcmp(diagLast.kind, "IK") == 0) how = "min-residual";
+        else if (strcmp(diagLast.kind, "MIXED") == 0) how = "single";
         Serial.printf("CHOSEN: [%d] (%s)\n", diagLast.chosen, how);
     } else {
         Serial.printf("FAIL: %s\n", diagLast.failReason);
