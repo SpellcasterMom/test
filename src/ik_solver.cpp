@@ -626,9 +626,10 @@ float IKSolver::clampAngle(int servoId, float angle) {
  * Вектор ошибки 6x1 для конфигурации q (радианы).
  *
  * e[0..2] — ошибка позиции TCP (мм): цель минус факт по FK.
- * e[3..5] — ошибка ориентации × NLS_ORI_W:
- *   e_o = 0.5 · Σ cross(c_i, t_i), где c_i — столбцы текущей матрицы R,
- *   t_i — столбцы целевой матрицы Rt (формула Сицилиано).
+ * e[3..5] — ошибка ориентации × NLS_ORI_W в формате axis-angle (θ·u):
+ *   R_err = Rt·Rᵀ, θ — угол, u — ось. Честная метрика без сворачивания
+ *   через синус (0.5·Σcross при θ→180° показывает 0 и тянет решатель
+ *   к ложному минимуму «вверх ногами»).
  */
 void IKSolver::ikError(const float qrad[6], const Mat4 &Rt, const Vec3 &pt, float e[6]) {
     float qdeg[6];
@@ -641,15 +642,35 @@ void IKSolver::ikError(const float qrad[6], const Mat4 &Rt, const Vec3 &pt, floa
     e[1] = pt.y - p.y;
     e[2] = pt.z - p.z;
 
-    float ex = 0.5f * ((R.m[1][0]*Rt.m[2][0] - R.m[2][0]*Rt.m[1][0]) +
-                       (R.m[1][1]*Rt.m[2][1] - R.m[2][1]*Rt.m[1][1]) +
-                       (R.m[1][2]*Rt.m[2][2] - R.m[2][2]*Rt.m[1][2]));
-    float ey = 0.5f * ((R.m[2][0]*Rt.m[0][0] - R.m[0][0]*Rt.m[2][0]) +
-                       (R.m[2][1]*Rt.m[0][1] - R.m[0][1]*Rt.m[2][1]) +
-                       (R.m[2][2]*Rt.m[0][2] - R.m[0][2]*Rt.m[2][2]));
-    float ez = 0.5f * ((R.m[0][0]*Rt.m[1][0] - R.m[1][0]*Rt.m[0][0]) +
-                       (R.m[0][1]*Rt.m[1][1] - R.m[1][1]*Rt.m[0][1]) +
-                       (R.m[0][2]*Rt.m[1][2] - R.m[1][2]*Rt.m[0][2]));
+    // R_err = Rt · Rᵀ (поворот, переводящий текущую ориентацию в целевую)
+    float Re[3][3];
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            Re[i][j] = Rt.m[i][0]*R.m[j][0] + Rt.m[i][1]*R.m[j][1] + Rt.m[i][2]*R.m[j][2];
+
+    float tr = Re[0][0] + Re[1][1] + Re[2][2];
+    float c = (tr - 1.0f) * 0.5f;
+    if (c > 1.0f) c = 1.0f;
+    if (c < -1.0f) c = -1.0f;
+    float th = acos(c);
+
+    // Ось из кососимметричной части: (R−Rᵀ)∨ = 2·sinθ·u
+    float ax = Re[2][1] - Re[1][2];
+    float ay = Re[0][2] - Re[2][0];
+    float az = Re[1][0] - Re[0][1];
+    float s = sqrt(ax*ax + ay*ay + az*az);
+    float ex = 0, ey = 0, ez = 0;
+    if (s > 1e-6f) {
+        // Обычный случай θ∈(0,π): e_o = θ·u
+        ex = ax / s * th;
+        ey = ay / s * th;
+        ez = az / s * th;
+    } else if (c < 0) {
+        // θ≈π: ось вырождена. Берём ось X текущей СК как направление —
+        // грубо, но сохраняет градиент и не даёт ложный ноль.
+        ex = th; ey = 0; ez = 0;
+    }
+    // else θ≈0: e_o = 0, всё верно
     e[3] = ex * NLS_ORI_W;
     e[4] = ey * NLS_ORI_W;
     e[5] = ez * NLS_ORI_W;
@@ -710,7 +731,7 @@ bool IKSolver::solve6(const float A[6][6], const float b[6], float x[6]) {
  * Захват (angles[6]) не трогается.
  */
 bool IKSolver::refineSolution(const Pose &target, JointAngles &q, IKSolutionMeta *meta) {
-    if (meta) { meta->iters = 0; meta->converged = false; }
+    if (meta) { meta->iters = 0; meta->converged = false; meta->dbgDq0 = -1; meta->dbgN1 = -1; }
 
     Mat4 Rt = eulerToMatrix(target.orientation.x * DEG_TO_RAD,
                             target.orientation.y * DEG_TO_RAD,
@@ -783,6 +804,11 @@ bool IKSolver::refineSolution(const Pose &target, JointAngles &q, IKSolutionMeta
             if (s < -NLS_MAX_STEP) s = -NLS_MAX_STEP;
             dq[k] = s;
         }
+        if (it == 0 && meta) {
+            float d = 0;
+            for (int k = 0; k < 6; k++) d += dq[k] * dq[k];
+            meta->dbgDq0 = sqrt(d);
+        }
 
         // Backtracking: пробуем полный шаг, половинки, ... — берём первый,
         // который строго уменьшил ошибку. Иначе — растим λ и повторяем.
@@ -796,6 +822,7 @@ bool IKSolver::refineSolution(const Pose &target, JointAngles &q, IKSolutionMeta
             nn = 0;
             for (int i = 0; i < 6; i++) nn += en[i] * en[i];
             nn = sqrt(nn);
+            if (ls == 0 && it == 0 && meta) meta->dbgN1 = nn;
             if (nn < enorm) { improved = true; break; }
             step *= 0.5f;
         }

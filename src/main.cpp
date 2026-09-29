@@ -224,6 +224,8 @@ struct DiagSol {
     bool converged = false; // DLS сошлось по допускам
     float seedPos = 0;      // невязка позиции у seed'а (мм)
     float seedOri = 0;      // невязка ориентации у seed'а (град)
+    float dbgDq0 = -1;      // норма первого dq (рад)
+    float dbgN1 = -1;       // норма ошибки после первого полного шага
     DiagSol() { memset(safeErr, 0, sizeof(safeErr)); }
 };
 
@@ -364,6 +366,8 @@ void handleG0(GCodeCommand &cmd) {
                 diagLast.sols[diagLast.solCount].converged = metas[i].converged;
                 diagLast.sols[diagLast.solCount].seedPos = metas[i].seedPos;
                 diagLast.sols[diagLast.solCount].seedOri = metas[i].seedOri;
+                diagLast.sols[diagLast.solCount].dbgDq0 = metas[i].dbgDq0;
+                diagLast.sols[diagLast.solCount].dbgN1 = metas[i].dbgN1;
                 diagLast.solCount++;
             }
 
@@ -422,6 +426,19 @@ void handleG0(GCodeCommand &cmd) {
             diagEvalSol(diagLast.sols[0], target, cmd.pose);
             diagLast.solCount = 1;
             diagLast.chosen = 0;
+            // solve() выше уже довёл решение; забираем meta для M115
+            // (доводка копии — железо не двигаем, дёшево: уже сошлось)
+            {
+                JointAngles tq = target;
+                IKSolutionMeta mm;
+                ikSolver.refineSolution(cmd.pose, tq, &mm);
+                diagLast.sols[0].iters = mm.iters;
+                diagLast.sols[0].converged = mm.converged;
+                diagLast.sols[0].seedPos = mm.seedPos;
+                diagLast.sols[0].seedOri = mm.seedOri;
+                diagLast.sols[0].dbgDq0 = mm.dbgDq0;
+                diagLast.sols[0].dbgN1 = mm.dbgN1;
+            }
             break;
         }
     }
@@ -662,6 +679,7 @@ void handleM115(GCodeCommand &cmd) {
         if (!diagLast.anglesOnly) {
             Serial.printf(" NLS:%s/%dit", s.converged ? "ok" : "fail", s.iters);
             if (!s.converged) Serial.printf(" seed=%.1fmm/%.1fdeg", s.seedPos, s.seedOri);
+            Serial.printf(" dq0=%.3f n1=%.1f", s.dbgDq0, s.dbgN1);
         }
         Serial.println();
         if (full || i == diagLast.chosen) {

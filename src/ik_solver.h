@@ -26,6 +26,8 @@ struct IKSolutionMeta {
     bool converged = false; // сошлось по допускам (позиция + ориентация)
     float seedPos = 0;      // невязка позиции у seed'а (мм)
     float seedOri = 0;      // невязка ориентации у seed'а (град)
+    float dbgDq0 = -1;      // норма первого dq (рад), -1 = не было итераций
+    float dbgN1 = -1;       // норма ошибки после первого полного шага
 };
 
 /**
