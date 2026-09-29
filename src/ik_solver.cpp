@@ -49,11 +49,11 @@
 // Параметры DLS-уточнения (см. refineSolution)
 // ============================================================================
 // NLS_LAMBDA   — демпфирование (λ² добавляется к диагонали J·Jᵀ)
-// NLS_ORI_W    — вес ориентации в векторе ошибки (1° ≈ 1.7 усл.мм)
+// NLS_ORI_W    — вес ориентации в векторе ошибки (1° ≈ 0.5 усл.мм)
 // NLS_DELTA    — шаг численного якобиана (рад)
 // NLS_MAX_STEP — максимальный шаг одного сустава за итерацию (рад)
 static const float NLS_LAMBDA = 0.3f;
-static const float NLS_ORI_W = 100.0f;
+static const float NLS_ORI_W = 30.0f;
 static const float NLS_DELTA = 1e-4f;
 static const float NLS_MAX_STEP = 0.2f;
 
@@ -782,27 +782,44 @@ bool IKSolver::refineSolution(const Pose &target, JointAngles &q, IKSolutionMeta
             for (int i = 0; i < 6; i++) J[i][j] = (e2[i] - e[i]) / NLS_DELTA;
         }
 
-        // DLS-направление: (J·Jᵀ + λ²I)·y = e ; dq = Jᵀ·y
+        // DLS-направление: (J·Jᵀ + λ²I)·y = e ; dq = Jᵀ·y.
+        // Active-set: сустав, стоящий на лимите и толкающий наружу,
+        // исключаем из задачи (обнуляем столбец J) и пересчитываем dq —
+        // иначе зажатое направление душит спуск по свободным суставам.
         float lam2 = lam * lam;
         float A[6][6], y[6], dq[6];
-        for (int i = 0; i < 6; i++) {
-            for (int j = 0; j < 6; j++) {
-                float s = (i == j) ? lam2 : 0.0f;
-                for (int k = 0; k < 6; k++) s += J[i][k] * J[j][k];
-                A[i][j] = s;
+        bool dirOk = false;
+        for (int round = 0; round < 6; round++) {
+            for (int i = 0; i < 6; i++) {
+                for (int j = 0; j < 6; j++) {
+                    float s = (i == j) ? lam2 : 0.0f;
+                    for (int k = 0; k < 6; k++) s += J[i][k] * J[j][k];
+                    A[i][j] = s;
+                }
             }
+            if (!solve6(A, e, y)) break;
+            for (int k = 0; k < 6; k++) {
+                float s = 0;
+                for (int i = 0; i < 6; i++) s += J[i][k] * y[i];
+                dq[k] = s;
+            }
+            int viol = -1;
+            const float WEPS = 1e-4f;
+            for (int k = 0; k < 6; k++) {
+                if ((qr[k] <= qmin[k] + WEPS && dq[k] < 0) ||
+                    (qr[k] >= qmax[k] - WEPS && dq[k] > 0)) { viol = k; break; }
+            }
+            if (viol < 0) { dirOk = true; break; }
+            for (int i = 0; i < 6; i++) J[i][viol] = 0;
         }
-        if (!solve6(A, e, y)) {
+        if (!dirOk) {
             lam = lam * 4.0f; if (lam > 1e4f) lam = 1e4f;
             if (++stall >= 15) break;
             continue;
         }
         for (int k = 0; k < 6; k++) {
-            float s = 0;
-            for (int i = 0; i < 6; i++) s += J[i][k] * y[i];
-            if (s > NLS_MAX_STEP) s = NLS_MAX_STEP;
-            if (s < -NLS_MAX_STEP) s = -NLS_MAX_STEP;
-            dq[k] = s;
+            if (dq[k] > NLS_MAX_STEP) dq[k] = NLS_MAX_STEP;
+            if (dq[k] < -NLS_MAX_STEP) dq[k] = -NLS_MAX_STEP;
         }
         if (it == 0 && meta) {
             float d = 0;
