@@ -477,6 +477,11 @@ void handleG0(GCodeCommand &cmd) {
     }
 
     float feedrate = cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE;
+    // Старт траектории и времени — из лучшего известного положения.
+    // Без этого проверка идёт от устаревшей точки интерполятора
+    // (после ребута — нули = недостижимый вылет 415мм) и даёт ложный
+    // фолбэк на sequential с шага 0.
+    interpolator.setCurrentAngles(currentAngles);
     if (interpolator.moveTo(target, feedrate)) {
         xSemaphoreTake(angleMutex, portMAX_DELAY);
         currentAngles = target;
@@ -539,6 +544,8 @@ void handleG28(GCodeCommand &cmd) {
     diagLast.solCount = 1;
     diagLast.chosen = 0;
 
+    // Старт — из лучшего известного положения (см. handleG0)
+    interpolator.setCurrentAngles(currentAngles);
     if (interpolator.moveTo(target, 300.0f)) {
         xSemaphoreTake(angleMutex, portMAX_DELAY);
         currentAngles = target;
@@ -1170,6 +1177,17 @@ void setup() {
         safety.setFingerLength(config.fingerLength);
         Serial.println("Using default config");
     }
+
+    // Стартовая поза после ребута: лучшего знания о железе нет
+    // (сервы без обратной связи), поэтому считаем, что рука запаркована
+    // дома (так уже считает дисплей). Нули здесь — худший вариант:
+    // это недостижимый вылет 415мм, и первая же проверка траектории
+    // валится на шаге 0 с ложным фолбэком на sequential.
+    // После ребута всё равно рекомендуется G28.
+    for (int i = 0; i < 7; i++) {
+        currentAngles.angles[i] = homeAngles.angles[i];
+    }
+    interpolator.setCurrentAngles(currentAngles);
 
     interpolator.setStepCallback(onInterpolationStep);
 
