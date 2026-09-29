@@ -441,7 +441,7 @@ void handleG0(GCodeCommand &cmd) {
                 strncpy(diagLast.failReason, "IK solve failed (MIXED moved anyway)",
                         sizeof(diagLast.failReason) - 1);
             }
-            diagEvalSol(diagLast.sols[0], target, cmd.pose);
+            diagEvalSol(diagLast.sols[0], target, effPose);
             diagLast.solCount = 1;
             diagLast.chosen = 0;
             // solve() выше уже довёл решение; забираем meta для M115
@@ -535,9 +535,9 @@ void handleG28(GCodeCommand &cmd) {
 
     diagBegin(park ? "PARK" : "HOME", 300.0f);
     diagLast.anglesOnly = true;
-            diagEvalSol(diagLast.sols[0], target, effPose);
-            diagLast.solCount = 1;
-            diagLast.chosen = 0;
+    diagEvalSol(diagLast.sols[0], target, cmd.pose);
+    diagLast.solCount = 1;
+    diagLast.chosen = 0;
 
     if (interpolator.moveTo(target, 300.0f)) {
         xSemaphoreTake(angleMutex, portMAX_DELAY);
