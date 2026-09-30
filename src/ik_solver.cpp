@@ -76,6 +76,7 @@ IKSolver::IKSolver() {
         a[i]     = DH_PARAMS[i][0];  // длина звена (мм)
         alpha[i] = DH_PARAMS[i][1];  // угол поворота (градусы)
         d[i]     = DH_PARAMS[i][2];  // осевое смещение (мм)
+        thetaOff[i] = DH_PARAMS[i][3]; // сдвиг нуля (J2: +90° = вертикаль)
         linkLen[i] = LINK_LENGTHS[i]; // длина звена для геометрического IK (мм)
     }
     // Копирование ограничений для 7 каналов (6 суставов + захват)
@@ -107,6 +108,7 @@ void IKSolver::setDHParams(const float params[6][4]) {
         a[i]     = params[i][0];
         alpha[i] = params[i][1];
         d[i]     = params[i][2];
+        thetaOff[i] = params[i][3];
     }
     syncFk();
 }
@@ -154,7 +156,7 @@ void IKSolver::syncFk() {
         dh[i][0] = a[i];
         dh[i][1] = alpha[i];
         dh[i][2] = d[i];
-        dh[i][3] = 0;
+        dh[i][3] = thetaOff[i];
     }
     fkSolver.setDHParams(dh);
     fkSolver.setLinkLengths(linkLen);
@@ -393,10 +395,12 @@ bool IKSolver::solvePosition(float x, float y, float z, float &q1, float &q2, fl
     q2 = atan2(s, r) - atan2(S, C);
 
     // ==================================================================
-    // ШАГ 7: Перевод из радиан в градусы
-    // ==================================================================
+    // ШАГ 7: Перевод из радиан в градусы + ноль плеча
+    // ====================================================================
+    // Геометрия выше считает q2 от ГОРИЗОНТАЛИ (DH-кадр), а математический
+    // ноль плеча — ВЕРТИКАЛЬ: q2_math = q2_DH − thetaOff[J2].
     q1 = q1 * RAD_TO_DEG;
-    q2 = q2 * RAD_TO_DEG;
+    q2 = q2 * RAD_TO_DEG - thetaOff[1];
     q3 = q3 * RAD_TO_DEG;
 
     return true;
@@ -410,7 +414,8 @@ bool IKSolver::solvePosition(float x, float y, float z, float &q1, float &q2, fl
  * Решение задачи ориентации (суставы q4, q5, q6) методом DH-декомпозиции.
  *
  * АЛГОРИТМ:
- *   1. Вычисляем T03 = T01 · T12 · T23, R03 — верхний левый блок 3×3.
+ *   1. Вычисляем T03 через fkSolver.getTransform (полные DH + theta_offset),
+ *      R03 — верхний левый блок 3×3.
  *   2. R06 из целевых углов Эйлера (roll, pitch, yaw).
  *   3. R36 = R03ᵀ · R06 (R03 ортогональна → R03⁻¹ = R03ᵀ).
  *   4. Декомпозиция R36 → q4, q5, q6 (с обработкой замка кардана).
@@ -418,47 +423,11 @@ bool IKSolver::solvePosition(float x, float y, float z, float &q1, float &q2, fl
 bool IKSolver::solveOrientation(float A, float B, float C,
                                  float q1, float q2, float q3,
                                  float &q4, float &q5, float &q6) {
-    float q1r = q1 * DEG_TO_RAD;
-    float q2r = q2 * DEG_TO_RAD;
-    float q3r = q3 * DEG_TO_RAD;
-
-    // --------------------------------------------------
-    // DH-матрица T01 (основание → сустав 1)
-    // --------------------------------------------------
-    float c1 = cos(q1r), s1 = sin(q1r);
-    float ca1 = cos(alpha[0] * DEG_TO_RAD), sa1 = sin(alpha[0] * DEG_TO_RAD);
-    Mat4 T01;
-    T01.m[0][0] = c1;    T01.m[0][1] = -s1*ca1;  T01.m[0][2] = s1*sa1;  T01.m[0][3] = a[0]*c1;
-    T01.m[1][0] = s1;    T01.m[1][1] = c1*ca1;   T01.m[1][2] = -c1*sa1; T01.m[1][3] = a[0]*s1;
-    T01.m[2][0] = 0;     T01.m[2][1] = sa1;       T01.m[2][2] = ca1;     T01.m[2][3] = d[0];
-    T01.m[3][3] = 1;
-
-    // --------------------------------------------------
-    // DH-матрица T12 (сустав 1 → сустав 2)
-    // --------------------------------------------------
-    float c2 = cos(q2r), s2 = sin(q2r);
-    float ca2 = cos(alpha[1] * DEG_TO_RAD);
-    Mat4 T12;
-    T12.m[0][0] = c2;    T12.m[0][1] = -s2*ca2;  T12.m[0][2] = 0;  T12.m[0][3] = a[1]*c2;
-    T12.m[1][0] = s2;    T12.m[1][1] = c2*ca2;   T12.m[1][2] = 0;  T12.m[1][3] = a[1]*s2;
-    T12.m[2][0] = 0;     T12.m[2][1] = 0;         T12.m[2][2] = 1;  T12.m[2][3] = 0;
-    T12.m[3][3] = 1;
-
-    // --------------------------------------------------
-    // DH-матрица T23 (сустав 2 → сустав 3)
-    // --------------------------------------------------
-    float c3 = cos(q3r), s3 = sin(q3r);
-    float ca3 = cos(alpha[2] * DEG_TO_RAD);
-    Mat4 T23;
-    T23.m[0][0] = c3;    T23.m[0][1] = -s3*ca3;  T23.m[0][2] = 0;  T23.m[0][3] = a[2]*c3;
-    T23.m[1][0] = s3;    T23.m[1][1] = c3*ca3;   T23.m[1][2] = 0;  T23.m[1][3] = a[2]*s3;
-    T23.m[2][0] = 0;     T23.m[2][1] = 0;         T23.m[2][2] = 1;  T23.m[2][3] = 0;
-    T23.m[3][3] = 1;
-
-    // --------------------------------------------------
-    // Вычисление T03 = T01 · T12 · T23
-    // --------------------------------------------------
-    Mat4 T03 = matMultiply(matMultiply(T01, T12), T23);
+    // T03 через общий FK-движок: учитывает theta_offset и полные DH
+    // (вручную собранные T01/T12/T23 их игнорировали и дублировали FK).
+    // q1..q3 здесь МАТЕМАТИЧЕСКИЕ (градусы), офсеты добавит computeFK.
+    float qq[6] = {q1, q2, q3, 0, 0, 0};
+    Mat4 T03 = fkSolver.getTransform(qq, 2);
 
     // Извлечение R03 (верхний левый блок 3×3)
     Mat4 R03 = Mat4::identity();
@@ -576,7 +545,7 @@ int IKSolver::solveAll(const Pose &target, JointAngles solutions[4],
         // Переводим q3 обратно в радианы для тригонометрии
         float q3rad = q3 * DEG_TO_RAD;
         float q2rad = atan2(s, r) - atan2(L2 * sin(q3rad), L1 + L2 * cos(q3rad));
-        q2 = q2rad * RAD_TO_DEG;   // перевод в градусы
+        q2 = q2rad * RAD_TO_DEG - thetaOff[1];   // в градусы + ноль плеча
 
         solveOrientation(target.orientation.x, target.orientation.y, target.orientation.z,
                          q1, q2, q3, q4, q5, q6);

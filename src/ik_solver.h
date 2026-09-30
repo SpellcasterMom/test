@@ -141,6 +141,9 @@ private:
     float alpha[6];
     float d[6];
 
+    /* theta_offset (математический ноль → DH-ноль), напр. J2: +90° = вертикаль */
+    float thetaOff[6];
+
     /* Длины звеньев (для геометрического IK) */
     int   linkLen[6];
 

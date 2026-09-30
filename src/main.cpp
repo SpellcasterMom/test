@@ -531,9 +531,10 @@ void handleG28(GCodeCommand &cmd) {
     bool park = cmd.hasParam['H' - 'A'] && (int)cmd.params['H' - 'A'] == 1;
 
     if (park) {
-        // Компактная сложенная поза (проверена по FK, см. DEFAULT_HOME_ANGLES).
-        // Старое (0,-60,-90) вело локоть ПОД СТОЛ (Z=-144)!
-        target.setAll(0, 60, -135, 0, 0, 0, 0);
+        // Компактная сложенная поза в МАТЕМАТИЧЕСКИХ углах (ноль плеча =
+        // вертикаль): то же физическое сложение, что twin-валидация
+        // DH-кадра (0,60,-135). Старое (0,-60,-90) вело локоть ПОД СТОЛ!
+        target.setAll(0, -30, -135, 0, 0, 0, 0);
     } else {
         for (int i = 0; i < 7; i++) {
             target.angles[i] = homeAngles.angles[i];
