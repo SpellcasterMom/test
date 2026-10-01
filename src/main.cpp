@@ -492,8 +492,12 @@ void handleG0(GCodeCommand &cmd) {
             }
 
             if (!foundSafe) {
-                strncpy(diagLast.failReason, "No safe IK solution",
-                        sizeof(diagLast.failReason) - 1);
+                // Не затираем причину, уже записанную порогом точности выше
+                // ("No accurate safe IK..."), — иначе диагностика врёт.
+                if (diagLast.failReason[0] == '\0') {
+                    strncpy(diagLast.failReason, "No safe IK solution",
+                            sizeof(diagLast.failReason) - 1);
+                }
                 xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
                 sharedState.hasError = true;
                 snprintf(sharedState.lastError, sizeof(sharedState.lastError), "No safe IK");
