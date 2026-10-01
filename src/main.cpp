@@ -340,6 +340,26 @@ void handleG0(GCodeCommand &cmd) {
         effPose.orientation.z = DEFAULT_ORI_C;
     }
 
+    // Поосевая семантика координат (чинило молчаливый G91):
+    //   - отсутствующая ось = держать текущую (а не 0!);
+    //   - в REL (G91) заданная ось = текущая TCP + дельта.
+    // Без этого G91 игнорировался (ехали в абсолют), а частичный
+    // G0 X20 в ABS уводил Y,Z в ноль. A/B/C в REL — абсолютные.
+    {
+        float cq[6];
+        for (int i = 0; i < 6; i++) cq[i] = currentAngles.angles[i];
+        Vec3 curTcp = fkSolver.getEndEffector(cq);
+        if (!absoluteMode) {
+            effPose.position.x = cmd.hasX ? curTcp.x + cmd.pose.position.x : curTcp.x;
+            effPose.position.y = cmd.hasY ? curTcp.y + cmd.pose.position.y : curTcp.y;
+            effPose.position.z = cmd.hasZ ? curTcp.z + cmd.pose.position.z : curTcp.z;
+        } else {
+            if (!cmd.hasX) effPose.position.x = curTcp.x;
+            if (!cmd.hasY) effPose.position.y = curTcp.y;
+            if (!cmd.hasZ) effPose.position.z = curTcp.z;
+        }
+    }
+
     JointAngles target;
 
     switch (cmd.mode) {
@@ -416,6 +436,22 @@ void handleG0(GCodeCommand &cmd) {
                 }
             }
             bool foundSafe = (best >= 0);
+            // Порог точности: лучший безопасный кандидат с невязкой хуже
+            // порога — это уже не заданное движение (напр. 127 мм мимо из-за
+            // отбраковки точных, но опасных). Отказываем вместо прыжка в мусор.
+            // Рабочие ходы идут с dPos<1мм/dOri в единицы градусов (двойник+железо).
+            const float IK_POS_TOL = 10.0f;   // мм
+            const float IK_ORI_TOL = 15.0f;   // град
+            if (foundSafe &&
+                (diagLast.sols[best].dPos > IK_POS_TOL ||
+                 diagLast.sols[best].dOri > IK_ORI_TOL)) {
+                foundSafe = false;
+                char tmp[96];
+                snprintf(tmp, sizeof(tmp),
+                         "No accurate safe IK (best dPos=%.1f dOri=%.1f)",
+                         diagLast.sols[best].dPos, diagLast.sols[best].dOri);
+                strncpy(diagLast.failReason, tmp, sizeof(diagLast.failReason) - 1);
+            }
             if (foundSafe) {
                 target = diagLast.sols[best].q;
                 diagLast.chosen = best;
