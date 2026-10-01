@@ -469,8 +469,10 @@ bool IKSolver::seedArm(float wx, float wy, float wz,
     float qq[6] = {0, 0, 0, 0, 0, 0};
     for (int it = 0; it < 3; it++) {
         qq[0] = q1; qq[1] = q2; qq[2] = q3;
+        // Сустав 3 в getJointPosition = J4 (конец звеньев 165+161),
+        // сустав 6 = фланец O6 (кончик кинематической цепочки без пальца).
         Vec3 pJ4 = fkSolver.getJointPosition(qq, 3);
-        Vec3 pO6 = fkSolver.getJointPosition(qq, 5);
+        Vec3 pO6 = fkSolver.getJointPosition(qq, 6);
         jx = wx - (pO6.x - pJ4.x);
         jy = wy - (pO6.y - pJ4.y);
         jz = wz - (pO6.z - pJ4.z);
@@ -594,8 +596,8 @@ int IKSolver::solveAll(const Pose &target, JointAngles solutions[4],
     // ================================================================
     // РЕШЕНИЯ 1-2: elbow down/up на КОМПЕНСИРОВАННОЙ цели J4
     // ================================================================
-    // Запястье не сферическое (J4→O6 ~107 мм): чистый solvePosition(wx,wy,wz)
-    // кладёт J4 в точку O6 — сид уходит на ~100 мм мимо и DLS не дотягивает.
+    // Запястье не сферическое: чистый solvePosition(wx,wy,wz)
+    // кладёт J4 в точку фланца O6 — сид уходит мимо и DLS не дотягивает.
     // seedArm() итеративно переносит цель на J4. DH при этом НЕ трогаем.
     float q1c, q2c, q3c, jx, jy, jz;
     if (seedArm(wx, wy, wz, q1c, q2c, q3c, jx, jy, jz)) {
