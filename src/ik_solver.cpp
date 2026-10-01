@@ -815,7 +815,7 @@ bool IKSolver::refineSolution(const Pose &target, JointAngles &q, IKSolutionMeta
     float tolOriW = numTolOri * DEG_TO_RAD * NLS_ORI_W;
     float enorm = bestN;
 
-    // Невязка seed'а для диагностики (M115 покажет seed → best)
+    // Расхождение seed'а для диагностики (M115 покажет seed → best)
     if (meta) {
         meta->seedPos = sqrt(e[0]*e[0] + e[1]*e[1] + e[2]*e[2]);
         meta->seedOri = sqrt(e[3]*e[3] + e[4]*e[4] + e[5]*e[5]) / NLS_ORI_W * RAD_TO_DEG;
