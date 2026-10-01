@@ -1397,6 +1397,7 @@ static float lastTCP[6]    = {99999, 99999, 99999, 99999, 99999, 99999};
 static float lastJoints[7] = {99999, 99999, 99999, 99999, 99999, 99999, 99999};
 static float lastGrip      = -1;
 static int8_t lastModeAbs  = -1;   // -1 = неизвестно, 0 = ABS, 1 = REL
+static int8_t lastStatus   = -1;   // -1 = неизвестно, 0 = READY, 1 = MOVING, 2 = ERROR
 static char lastCmdShown[24] = ""; // последняя выведенная команда (анти-мерцание)
 
 static void drawField(int xLabel, int xValue, int y,
@@ -1456,6 +1457,7 @@ void displayInit() {
     for (int i = 0; i < 7; i++) lastJoints[i] = 99999;
     lastGrip = -1;
     lastModeAbs = -1;
+    lastStatus = -1;
     lastCmdShown[0] = '\0';
 }
 
@@ -1494,21 +1496,29 @@ void displayUpdate() {
     // === Status Bar (3 строки) ===
     int sy = ZONE_STATUS_Y + 8;
 
-    // --- Строка 1: READY / MOVING / ERROR + счётчик справа ---
-    tft.setTextSize(2);
-    tft.setCursor(4, sy);
-    if (state.hasError) {
-        tft.setTextColor(COLOR_ERROR, ST77XX_BLACK);
-        tft.print("! ERROR  ");
-    } else if (state.isMoving) {
-        tft.setTextColor(COLOR_MOVING, ST77XX_BLACK);
-        tft.print("> MOVING ");
-    } else {
-        tft.setTextColor(COLOR_READY, ST77XX_BLACK);
-        tft.print("READY    ");
+    // --- Строка 1: READY / MOVING / ERROR + режим + счётчик справа ---
+    // Статус — только при смене (безусловная перерисовка даёт мерцание
+    // и затирает соседей). Поле статуса ровно 8 символов (x=4..100),
+    // ABS начинается с x=110 — пересечений нет.
+    int8_t st = state.hasError ? 2 : (state.isMoving ? 1 : 0);
+    if (st != lastStatus) {
+        lastStatus = st;
+        tft.setTextSize(2);
+        tft.setCursor(4, sy);
+        if (st == 2) {
+            tft.setTextColor(COLOR_ERROR, ST77XX_BLACK);
+            tft.print("! ERROR ");
+        } else if (st == 1) {
+            tft.setTextColor(COLOR_MOVING, ST77XX_BLACK);
+            tft.print("> MOVING");
+        } else {
+            tft.setTextColor(COLOR_READY, ST77XX_BLACK);
+            tft.print("READY   ");
+        }
     }
 
     // Счётчик прижат вправо
+    tft.setTextSize(2);
     char cntBuf[8];
     snprintf(cntBuf, sizeof(cntBuf), "%4u ", (unsigned)state.commandCount);
     int cntW = strlen(cntBuf) * 6 * 2;
