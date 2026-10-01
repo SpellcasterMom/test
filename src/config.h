@@ -4,7 +4,7 @@
  * Group       : УТС/б-23-1-о
  * Mentor      : Lipko I.Y.
  * Date        : 2026-09-18
- * Last modify : 2026-09-25
+ * Last modify : 2026-10-01
  */
 
 /**
