@@ -74,9 +74,9 @@
  *   │ P3:    0     P6:    0               │
  *   │ Gripper:   50%                      │
  *   ├─────────────────────────────────────┤  y=176
- *   │ READY                          123  │  статус + счётчик
- *   │ Safe:ON     PCA:OFF            ABS  │  safety + PCA + режим
- *   │ G:G28                               │  последняя команда
+ *   │ READY         ABS              123  │  статус + режим + счётчик
+ *   │ Safe:ON       PCA:OFF               │  safety + PCA
+ *   │ G28                                 │  последняя команда
  *   └─────────────────────────────────────┘  y=240
  *
  * =====================================================================
@@ -1512,6 +1512,14 @@ void displayUpdate() {
     tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
     tft.print(cntBuf);
 
+    // Режим ABS/REL — по центру первой строки статуса (после READY/MOVING/ERROR)
+    {
+        const char *modeStr = absoluteMode ? "ABS" : "REL";
+        tft.setCursor(116, sy);
+        tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
+        tft.print(modeStr);
+    }
+
     // --- Строка 2: Safe + PCA + ABS/REL ---
     sy += 16;
     tft.setCursor(4, sy);
@@ -1526,21 +1534,14 @@ void displayUpdate() {
     tft.setTextColor(state.pcaReady ? ST77XX_GREEN : ST77XX_RED, ST77XX_BLACK);
     tft.print(state.pcaReady ? "ON " : "OFF");
 
-    const char *modeStr = absoluteMode ? "ABS " : "REL ";
-    int modeW = 4 * 6 * 2;
-    tft.setCursor(236 - modeW, sy);
-    tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
-    tft.print(modeStr);
-
-    // --- Строка 3: последняя команда ---
-    // Формат: "G:" + команда (до 17 символов) + хвостовые пробелы
-    // до фиксированной ширины 20 символов = 240 px при size=2.
+    // --- Строка 3: последняя команда (как есть, до 20 символов) ---
+    // Добиваем пробелами до фиксированной ширины 20 символов = 240 px при size=2.
     sy += 16;
     tft.setCursor(4, sy);
     tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
 
     char cmdBuf[32];
-    snprintf(cmdBuf, sizeof(cmdBuf), "G:%-17.17s", state.lastCommand);
+    snprintf(cmdBuf, sizeof(cmdBuf), "%-20.20s", state.lastCommand);
     // Добиваем пробелами до 20 символов (240 px)
     int cmdW = strlen(cmdBuf) * 6 * 2;
     while (cmdW < 20 * 12 && strlen(cmdBuf) < sizeof(cmdBuf) - 1) {
