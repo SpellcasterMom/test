@@ -74,9 +74,9 @@
  *   │ P3:    0     P6:    0               │
  *   │ Gripper:   50%                      │
  *   ├─────────────────────────────────────┤  y=176
- *   │ READY                          123  │  статус + счётчик
- *   │ Safe:ON     PCA:OFF            ABS  │  safety + PCA + режим
- *   │ G:G28                               │  последняя команда
+ *   │ READY           ABS            123  │  статус + режим + счётчик
+ *   │ Safe:ON         PCA:OFF              │  safety + PCA
+ *   │ G28                                 │  последняя команда
  *   └─────────────────────────────────────┘  y=240
  *
  * =====================================================================
@@ -1396,6 +1396,9 @@ static void drawZoneHeader(int y, const char *title) {
 static float lastTCP[6]    = {99999, 99999, 99999, 99999, 99999, 99999};
 static float lastJoints[7] = {99999, 99999, 99999, 99999, 99999, 99999, 99999};
 static float lastGrip      = -1;
+static int8_t lastModeAbs  = -1;   // -1 = неизвестно, 0 = ABS, 1 = REL
+static int8_t lastStatus   = -1;   // -1 = неизвестно, 0 = READY, 1 = MOVING, 2 = ERROR
+static char lastCmdShown[24] = ""; // последняя выведенная команда (анти-мерцание)
 
 static void drawField(int xLabel, int xValue, int y,
                       const char *label, float value, float &lastVal,
@@ -1453,6 +1456,9 @@ void displayInit() {
     for (int i = 0; i < 6; i++) lastTCP[i] = 99999;
     for (int i = 0; i < 7; i++) lastJoints[i] = 99999;
     lastGrip = -1;
+    lastModeAbs = -1;
+    lastStatus = -1;
+    lastCmdShown[0] = '\0';
 }
 
 /**
@@ -1490,27 +1496,48 @@ void displayUpdate() {
     // === Status Bar (3 строки) ===
     int sy = ZONE_STATUS_Y + 8;
 
-    // --- Строка 1: READY / MOVING / ERROR + счётчик справа ---
-    tft.setTextSize(2);
-    tft.setCursor(4, sy);
-    if (state.hasError) {
-        tft.setTextColor(COLOR_ERROR, ST77XX_BLACK);
-        tft.print("! ERROR  ");
-    } else if (state.isMoving) {
-        tft.setTextColor(COLOR_MOVING, ST77XX_BLACK);
-        tft.print("> MOVING ");
-    } else {
-        tft.setTextColor(COLOR_READY, ST77XX_BLACK);
-        tft.print("READY    ");
+    // --- Строка 1: READY / MOVING / ERROR + режим + счётчик справа ---
+    // Статус — только при смене (безусловная перерисовка даёт мерцание
+    // и затирает соседей). Поле статуса ровно 8 символов (x=4..100),
+    // ABS начинается с x=110 — пересечений нет.
+    int8_t st = state.hasError ? 2 : (state.isMoving ? 1 : 0);
+    if (st != lastStatus) {
+        lastStatus = st;
+        tft.setTextSize(2);
+        tft.setCursor(4, sy);
+        if (st == 2) {
+            tft.setTextColor(COLOR_ERROR, ST77XX_BLACK);
+            tft.print("! ERROR ");
+        } else if (st == 1) {
+            tft.setTextColor(COLOR_MOVING, ST77XX_BLACK);
+            tft.print("> MOVING");
+        } else {
+            tft.setTextColor(COLOR_READY, ST77XX_BLACK);
+            tft.print("READY   ");
+        }
     }
 
     // Счётчик прижат вправо
+    tft.setTextSize(2);
     char cntBuf[8];
     snprintf(cntBuf, sizeof(cntBuf), "%4u ", (unsigned)state.commandCount);
     int cntW = strlen(cntBuf) * 6 * 2;
     tft.setCursor(236 - cntW, sy);
     tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
     tft.print(cntBuf);
+
+    // Режим ABS/REL — над PCA (колонка x=110).
+    // Рисуем только при смене: безусловная перерисовка каждые 200 мс
+    // даёт видимое мерцание буквы.
+    {
+        int8_t m = absoluteMode ? 0 : 1;
+        if (m != lastModeAbs) {
+            lastModeAbs = m;
+            tft.setCursor(110, sy);
+            tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
+            tft.print(m == 0 ? "ABS" : "REL");
+        }
+    }
 
     // --- Строка 2: Safe + PCA + ABS/REL ---
     sy += 16;
@@ -1520,27 +1547,24 @@ void displayUpdate() {
     tft.setTextColor(state.safetyEnabled ? ST77XX_GREEN : ST77XX_RED, ST77XX_BLACK);
     tft.print(state.safetyEnabled ? "ON " : "OFF");
 
-    tft.setCursor(98, sy);
+    tft.setCursor(110, sy);
     tft.setTextColor(COLOR_STATUS_LABEL, ST77XX_BLACK);
     tft.print("PCA:");
     tft.setTextColor(state.pcaReady ? ST77XX_GREEN : ST77XX_RED, ST77XX_BLACK);
     tft.print(state.pcaReady ? "ON " : "OFF");
 
-    const char *modeStr = absoluteMode ? "ABS " : "REL ";
-    int modeW = 4 * 6 * 2;
-    tft.setCursor(236 - modeW, sy);
-    tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
-    tft.print(modeStr);
-
-    // --- Строка 3: последняя команда ---
-    // Формат: "G:" + команда (до 17 символов) + хвостовые пробелы
-    // до фиксированной ширины 20 символов = 240 px при size=2.
+    // --- Строка 3: последняя команда (как есть, до 20 символов) ---
+    // Добиваем пробелами до фиксированной ширины 20 символов = 240 px при size=2.
     sy += 16;
     tft.setCursor(4, sy);
     tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
 
     char cmdBuf[32];
-    snprintf(cmdBuf, sizeof(cmdBuf), "G:%-17.17s", state.lastCommand);
+    snprintf(cmdBuf, sizeof(cmdBuf), "%-20.20s", state.lastCommand);
+    // Команду тоже только при смене (та же причина — мерцание).
+    if (strncmp(cmdBuf, lastCmdShown, sizeof(lastCmdShown)) != 0) {
+        strncpy(lastCmdShown, cmdBuf, sizeof(lastCmdShown) - 1);
+        lastCmdShown[sizeof(lastCmdShown) - 1] = '\0';
     // Добиваем пробелами до 20 символов (240 px)
     int cmdW = strlen(cmdBuf) * 6 * 2;
     while (cmdW < 20 * 12 && strlen(cmdBuf) < sizeof(cmdBuf) - 1) {
@@ -1548,6 +1572,7 @@ void displayUpdate() {
         cmdW = strlen(cmdBuf) * 6 * 2;
     }
     tft.print(cmdBuf);
+    }
 
     tft.endWrite();
 }
