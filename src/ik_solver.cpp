@@ -407,6 +407,82 @@ bool IKSolver::solvePosition(float x, float y, float z, float &q1, float &q2, fl
 }
 
 // ============================================================================
+// ЗАЖАТАЯ ВЕРСИЯ solvePosition (только сид для DLS)
+// ============================================================================
+
+/**
+ * Та же геометрия, но вместо отказа при недостижимости (r,s) зажимаются
+ * в достижимое кольцо [|L1−L2|, L1+L2]. Двойник: solve.py solve_position(clamped).
+ */
+bool IKSolver::solvePositionClamped(float x, float y, float z, float &q1, float &q2, float &q3) {
+    float d0 = d[0];
+    float a0 = a[0];
+
+    q1 = atan2(y, x);
+
+    float r = sqrt(x * x + y * y) - a0;
+    float s = z - d0;
+
+    float L1 = a[1];
+    float L2 = a[2];
+
+    float dist = sqrt(r * r + s * s);
+    if (dist > (L1 + L2) || dist < fabs(L1 - L2)) {
+        if (dist < 1e-9f) return false;
+        float lo = fabs(L1 - L2) + 1e-3f;
+        float hi = (L1 + L2) - 1e-3f;
+        float k = (dist > L1 + L2) ? hi / dist : lo / dist;
+        r *= k;
+        s *= k;
+    }
+
+    float cosQ3 = (r * r + s * s - L1 * L1 - L2 * L2) / (2.0f * L1 * L2);
+    cosQ3 = constrain(cosQ3, -1.0f, 1.0f);
+    q3 = -acos(cosQ3);   // «elbow down» — q3 < 0
+
+    float sinQ3 = sin(q3);
+    float C = L1 + L2 * cosQ3;
+    float S = L2 * sinQ3;
+    q2 = atan2(s, r) - atan2(S, C);
+
+    // Ноль плеча — ВЕРТИКАЛЬ (как в solvePosition)
+    q1 = q1 * RAD_TO_DEG;
+    q2 = q2 * RAD_TO_DEG - thetaOff[1];
+    q3 = q3 * RAD_TO_DEG;
+
+    return true;
+}
+
+// ============================================================================
+// СИД РУКИ С КОМПЕНСАЦИЕЙ ЗАПЯСТЬЯ (fixed-point)
+// ============================================================================
+
+bool IKSolver::seedArm(float wx, float wy, float wz,
+                       float &q1, float &q2, float &q3,
+                       float &jx, float &jy, float &jz) {
+    bool haveArm = false;
+    if (solvePosition(wx, wy, wz, q1, q2, q3)) haveArm = true;
+    else if (solvePositionClamped(wx, wy, wz, q1, q2, q3)) haveArm = true;
+    if (!haveArm) return false;
+
+    jx = wx; jy = wy; jz = wz;
+    float qq[6] = {0, 0, 0, 0, 0, 0};
+    for (int it = 0; it < 3; it++) {
+        qq[0] = q1; qq[1] = q2; qq[2] = q3;
+        Vec3 pJ4 = fkSolver.getJointPosition(qq, 3);
+        Vec3 pO6 = fkSolver.getJointPosition(qq, 5);
+        jx = wx - (pO6.x - pJ4.x);
+        jy = wy - (pO6.y - pJ4.y);
+        jz = wz - (pO6.z - pJ4.z);
+        float n1, n2, n3;
+        if (solvePosition(jx, jy, jz, n1, n2, n3)) { q1 = n1; q2 = n2; q3 = n3; }
+        else if (solvePositionClamped(jx, jy, jz, n1, n2, n3)) { q1 = n1; q2 = n2; q3 = n3; }
+        else break;
+    }
+    return true;
+}
+
+// ============================================================================
 // РЕШЕНИЕ ЗАДАЧИ ОРИЕНТАЦИИ (СУСТАВЫ 4–6): DH-ДЕКОМПОЗИЦИЯ
 // ============================================================================
 
@@ -516,9 +592,15 @@ int IKSolver::solveAll(const Pose &target, JointAngles solutions[4],
     float wz = target.position.z - toolDir.z * fingerLength;
 
     // ================================================================
-    // РЕШЕНИЕ 1: elbow down (q3 < 0)
+    // РЕШЕНИЯ 1-2: elbow down/up на КОМПЕНСИРОВАННОЙ цели J4
     // ================================================================
-    if (solvePosition(wx, wy, wz, q1, q2, q3)) {
+    // Запястье не сферическое (J4→O6 ~107 мм): чистый solvePosition(wx,wy,wz)
+    // кладёт J4 в точку O6 — сид уходит на ~100 мм мимо и DLS не дотягивает.
+    // seedArm() итеративно переносит цель на J4. DH при этом НЕ трогаем.
+    float q1c, q2c, q3c, jx, jy, jz;
+    if (seedArm(wx, wy, wz, q1c, q2c, q3c, jx, jy, jz)) {
+        // --- Решение 1: elbow down ---
+        q1 = q1c; q2 = q2c; q3 = q3c;
         solveOrientation(target.orientation.x, target.orientation.y, target.orientation.z,
                          q1, q2, q3, q4, q5, q6);
         solutions[count].setAll(
@@ -526,23 +608,16 @@ int IKSolver::solveAll(const Pose &target, JointAngles solutions[4],
             clampAngle(3, q4), clampAngle(4, q5), clampAngle(5, q6),
             0);
         count++;
-    }
 
-    // ================================================================
-    // РЕШЕНИЕ 2: elbow up (q3 > 0)
-    // ================================================================
-    // ИСПРАВЛЕНО: q3 после solvePosition() уже в градусах.
-    // Для вызова sin/cos переводим обратно в радианы (q3rad),
-    // иначе atan2 получит некорректные аргументы.
-    if (solvePosition(wx, wy, wz, q1, q2, q3)) {
+        // --- Решение 2: elbow up (на той же компенсированной цели jx,jy,jz) ---
+        // q3 после seedArm() уже в градусах; для sin/cos переводим в радианы.
         q3 = -q3;   // elbow down → elbow up (градусы)
 
-        float r = sqrt(wx * wx + wy * wy) - a[0];
-        float s = wz - d[0];
+        float r = sqrt(jx * jx + jy * jy) - a[0];
+        float s = jz - d[0];
         float L1 = a[1];
         float L2 = a[2];
 
-        // Переводим q3 обратно в радианы для тригонометрии
         float q3rad = q3 * DEG_TO_RAD;
         float q2rad = atan2(s, r) - atan2(L2 * sin(q3rad), L1 + L2 * cos(q3rad));
         q2 = q2rad * RAD_TO_DEG - thetaOff[1];   // в градусы + ноль плеча
@@ -557,10 +632,21 @@ int IKSolver::solveAll(const Pose &target, JointAngles solutions[4],
     }
 
     // ================================================================
+    // РЕШЕНИЕ 3: сид «нули» — центральная конфигурация
+    // ================================================================
+    // Сильная ветвь для верхней полусферы; для цели «нули» даёт 0 итераций.
+    // Место в solutions[4] есть (сейчас занято ≤2), 4-й слот — для кандидата
+    // от текущей позы (добавляет обработчик G0).
+    if (count < 4) {
+        solutions[count].setAll(0, 0, 0, 0, 0, 0, 0);
+        count++;
+    }
+
+    // ================================================================
     // ЭТАП 3: ЧИСЛЕННОЕ УТОЧНЕНИЕ (DLS)
     // ================================================================
-    // Запястье НЕ сферическое (вылеты 3×25 мм), поэтому геометрические
-    // решения доводим по полной FK-цепочке. Seed'ы уже в solutions[].
+    // Запястье НЕ сферическое (J4→O6 ~107 мм по чертежу robot1),
+    // поэтому геометрические решения доводим по полной FK-цепочке. Seed'ы уже в solutions[].
     for (int i = 0; i < count; i++) {
         IKSolutionMeta m;
         refineSolution(target, solutions[i], &m);

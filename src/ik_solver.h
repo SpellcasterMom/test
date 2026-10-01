@@ -197,6 +197,30 @@ private:
     bool solvePosition(float x, float y, float z, float &q1, float &q2, float &q3);
 
     /**
+     * Зажатая версия solvePosition: вместо отказа (false) при недостижимости
+     * возвращает решение с (r,s), зажатыми в достижимое кольцо
+     * (рука максимально вытянута/сложена в сторону цели).
+     * Это только СИД для DLS, не точное решение. Строгий solvePosition()
+     * не трогаем — его использует isReachable().
+     */
+    bool solvePositionClamped(float x, float y, float z, float &q1, float &q2, float &q3);
+
+    /**
+     * Сид q1–q3 с компенсацией несферического запястья (fixed-point).
+     * Чистый solvePosition(wx,wy,wz) кладёт J4 (конец звеньев 165+161)
+     * в точку O6 (TCP − палец) — при запястье J4→O6 ~107 мм сид уходит
+     * на ~100 мм мимо и DLS не дотягивает. Итеративно переносим цель:
+     *   J4t = O6t − (O6straight − J4), O6straight = FK(q123, 0,0,0).
+     * Сустав 3 в getJointPosition = J4, сустав 5 = O6 (J6).
+     *
+     * @return true если есть сид (строгий или зажатый), jx/jy/jz —
+     *         скомпенсированная цель J4 (для elbow-up ветви)
+     */
+    bool seedArm(float wx, float wy, float wz,
+                 float &q1, float &q2, float &q3,
+                 float &jx, float &jy, float &jz);
+
+    /**
      * Решение задачи ориентации (суставы q4, q5, q6) методом DH-декомпозиции.
      *
      * Алгоритм:

@@ -380,6 +380,27 @@ void handleG0(GCodeCommand &cmd) {
                 diagLast.solCount++;
             }
 
+            // Кандидат от текущей позы (трекинг при стриминге мелких шагов):
+            // DLS из current сходится за ~2 итерации (двойник: 40/40 из ±10°).
+            // Общий выбор min-residual сам предпочтёт его, когда он хорош.
+            // Слот в diagLast.sols есть (максимум 4, solveAll даёт ≤3).
+            if (diagLast.solCount < 4 && solCount > 0) {
+                JointAngles curSeed = currentAngles;
+                IKSolutionMeta curMeta;
+                ikSolver.refineSolution(effPose, curSeed, &curMeta);
+                if (cmd.hasGripper) {
+                    curSeed.angles[6] = cmd.pose.gripper;
+                }
+                diagEvalSol(diagLast.sols[diagLast.solCount], curSeed, effPose);
+                diagLast.sols[diagLast.solCount].iters = curMeta.iters;
+                diagLast.sols[diagLast.solCount].converged = curMeta.converged;
+                diagLast.sols[diagLast.solCount].seedPos = curMeta.seedPos;
+                diagLast.sols[diagLast.solCount].seedOri = curMeta.seedOri;
+                diagLast.sols[diagLast.solCount].dbgDq0 = curMeta.dbgDq0;
+                diagLast.sols[diagLast.solCount].dbgN1 = curMeta.dbgN1;
+                diagLast.solCount++;
+            }
+
             // Выбираем безопасное решение с минимальной невязкой:
             // score = dPos[мм] + 1.0·dOri[град] (вес настраивается).
             // «Первый безопасный» систематически брал худший вариант
