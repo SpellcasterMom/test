@@ -202,7 +202,7 @@ public:
             cfg.panel_height   = 240;
             cfg.offset_rotation = 0;
             cfg.readable       = false;
-            cfg.invert         = false;
+            cfg.invert         = true;    // ST7789: без инверсии цвета перевёрнуты
             cfg.rgb_order      = false;
             _panel_instance.config(cfg);
         }
@@ -1463,7 +1463,7 @@ static void drawField(int xLabel, int xValue, int y,
  */
 void displayInit() {
     tft.init();
-    tft.setRotation(2);           // поворот 180°
+    tft.setRotation(0);           // было 180° (Adafruit), здесь вверх ногами — ставим 0°
     tft.fillScreen(TFT_BLACK);
 
     // Заставка: "6DOF" + "Initializing..."
