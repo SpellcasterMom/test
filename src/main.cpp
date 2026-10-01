@@ -101,8 +101,7 @@
 
 #include <Arduino.h>
 // #include <TFT_eSPI.h>
-#include <Adafruit_ST7789.h>
-#include <Adafruit_GFX.h>
+#include <LovyanGFX.hpp>
 #include <SPI.h>
 #include <cmath>
 #include "config.h"
@@ -118,12 +117,8 @@
 #include "gripper_controller.h"
 #include "eeprom_storage.h"
 
-// Пины SPI для ST7789
-#define TFT_MOSI 23
-#define TFT_SCLK 18
-#define TFT_CS    5
-#define TFT_DC    2
-#define TFT_RST   4
+// Пины SPI для ST7789 заданы в классе LGFX ниже (VSPI).
+// Отдельные #define не нужны.
 
 // ===== Глобальные объекты =====
 
@@ -174,9 +169,47 @@ TaskHandle_t core0TaskHandle = NULL;
 TaskHandle_t core1TaskHandle = NULL;
 SemaphoreHandle_t angleMutex = NULL;
 
-// ===== Дисплей ST7789 =====
-// Экран 1.54" 240×240, SPI (VSPI), пины: MOSI=23, SCK=18, CS=5, DC=2, RST=4
-Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
+// ===== Дисплей ST7789 (LovyanGFX, DMA) =====
+// Экран 1.54" 240×240. Пины заданы здесь (VSPI-родные: MOSI=23, SCLK=18).
+// Ручки под конкретную партию стекла (если картинка сдвинута/инвертирована):
+//   offset_rotation / invert / rgb_order ниже.
+class LGFX : public lgfx::LGFX_Device {
+    lgfx::Panel_ST7789 _panel_instance;
+    lgfx::Bus_SPI      _bus_instance;
+public:
+    LGFX(void) {
+        {
+            auto cfg = _bus_instance.config();
+            // Хост: SPI2_HOST (HSPI). Макрос VSPI (=3) spi_bus_initialize
+            // отвергает (invalid host_id) — берём IDF-enum напрямую.
+            // Пины заданы ниже явно, матрица дотянет их до любого хоста.
+            cfg.spi_host   = SPI2_HOST;
+            cfg.spi_mode   = 0;
+            cfg.freq_write = 40000000;
+            cfg.freq_read  = 16000000;
+            cfg.pin_sclk   = 18;
+            cfg.pin_mosi   = 23;
+            cfg.pin_miso   = -1;
+            cfg.pin_dc     = 2;
+            _bus_instance.config(cfg);
+            _panel_instance.setBus(&_bus_instance);
+        }
+        {
+            auto cfg = _panel_instance.config();
+            cfg.pin_cs         = 5;
+            cfg.pin_rst        = 4;
+            cfg.panel_width    = 240;
+            cfg.panel_height   = 240;
+            cfg.offset_rotation = 0;
+            cfg.readable       = false;
+            cfg.invert         = true;    // ST7789: без инверсии цвета перевёрнуты
+            cfg.rgb_order      = false;
+            _panel_instance.config(cfg);
+        }
+        setPanel(&_panel_instance);
+    }
+};
+LGFX tft;
 
 // ===== Структура общего состояния для дисплея =====
 struct SharedState {
@@ -1350,16 +1383,16 @@ void onInterpolationStep(const JointAngles &angles) {
 
 // Цвета
 #define COLOR_ZONE_HEADER_BG  0x000F   // navy (тёмно-синий)
-#define COLOR_ZONE_HEADER_FG  ST77XX_CYAN
-#define COLOR_FIELD_LABEL     ST77XX_WHITE
-#define COLOR_TCP             ST77XX_GREEN
-#define COLOR_JOINT           ST77XX_YELLOW
+#define COLOR_ZONE_HEADER_FG  TFT_CYAN
+#define COLOR_FIELD_LABEL     TFT_WHITE
+#define COLOR_TCP             TFT_GREEN
+#define COLOR_JOINT           TFT_YELLOW
 #define COLOR_GRIPPER         0xFDA0   // оранжевый
-#define COLOR_READY           ST77XX_GREEN
-#define COLOR_MOVING          ST77XX_YELLOW
-#define COLOR_ERROR           ST77XX_RED
-#define COLOR_STATUS_LABEL    ST77XX_WHITE
-#define COLOR_STATUS_VALUE    ST77XX_CYAN
+#define COLOR_READY           TFT_GREEN
+#define COLOR_MOVING          TFT_YELLOW
+#define COLOR_ERROR           TFT_RED
+#define COLOR_STATUS_LABEL    TFT_WHITE
+#define COLOR_STATUS_VALUE    TFT_CYAN
 
 // Шрифт: setTextSize(2) = 16px высота строки
 #define FONT_HEIGHT  16
@@ -1409,14 +1442,14 @@ static void drawField(int xLabel, int xValue, int y,
     tft.setTextSize(2);
 
     // Метка слева
-    tft.setTextColor(COLOR_FIELD_LABEL, ST77XX_BLACK);
+    tft.setTextColor(COLOR_FIELD_LABEL, TFT_BLACK);
     tft.setCursor(xLabel, y);
     tft.print(label);
 
     // Число — фиксированное поле, знак "-" не сдвигает цифры
     char buf[16];
     snprintf(buf, sizeof(buf), "%4.0f%s ", value, unit);
-    tft.setTextColor(color, ST77XX_BLACK);
+    tft.setTextColor(color, TFT_BLACK);
     tft.setCursor(xValue, y);
     tft.print(buf);
 }
@@ -1429,22 +1462,21 @@ static void drawField(int xLabel, int xValue, int y,
  * displayInit() — инициализация ST7789 дисплея.
  */
 void displayInit() {
-    tft.init(240, 240);
-    tft.setSPISpeed(40000000);   // 40 МГц
-    tft.setRotation(2);           // поворот 180°
-    tft.fillScreen(ST77XX_BLACK);
+    tft.init();
+    tft.setRotation(0);           // было 180° (Adafruit), здесь вверх ногами — ставим 0°
+    tft.fillScreen(TFT_BLACK);
 
     // Заставка: "6DOF" + "Initializing..."
-    tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setTextSize(3);
     tft.setCursor(40, 80);
     tft.println("  6DOF");
     tft.setTextSize(2);
     tft.setCursor(20, 120);
-    tft.setTextColor(ST77XX_CYAN, ST77XX_BLACK);
+    tft.setTextColor(TFT_CYAN, TFT_BLACK);
     tft.println(" Initializing...");
     delay(2000);
-    tft.fillScreen(ST77XX_BLACK);
+    tft.fillScreen(TFT_BLACK);
 
     tft.setTextSize(2);
 
@@ -1506,13 +1538,13 @@ void displayUpdate() {
         tft.setTextSize(2);
         tft.setCursor(4, sy);
         if (st == 2) {
-            tft.setTextColor(COLOR_ERROR, ST77XX_BLACK);
+            tft.setTextColor(COLOR_ERROR, TFT_BLACK);
             tft.print("! ERROR ");
         } else if (st == 1) {
-            tft.setTextColor(COLOR_MOVING, ST77XX_BLACK);
+            tft.setTextColor(COLOR_MOVING, TFT_BLACK);
             tft.print("> MOVING");
         } else {
-            tft.setTextColor(COLOR_READY, ST77XX_BLACK);
+            tft.setTextColor(COLOR_READY, TFT_BLACK);
             tft.print("READY   ");
         }
     }
@@ -1523,7 +1555,7 @@ void displayUpdate() {
     snprintf(cntBuf, sizeof(cntBuf), "%4u ", (unsigned)state.commandCount);
     int cntW = strlen(cntBuf) * 6 * 2;
     tft.setCursor(236 - cntW, sy);
-    tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
+    tft.setTextColor(COLOR_STATUS_VALUE, TFT_BLACK);
     tft.print(cntBuf);
 
     // Режим ABS/REL — над PCA (колонка x=110).
@@ -1534,7 +1566,7 @@ void displayUpdate() {
         if (m != lastModeAbs) {
             lastModeAbs = m;
             tft.setCursor(110, sy);
-            tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
+            tft.setTextColor(COLOR_STATUS_VALUE, TFT_BLACK);
             tft.print(m == 0 ? "ABS" : "REL");
         }
     }
@@ -1542,22 +1574,22 @@ void displayUpdate() {
     // --- Строка 2: Safe + PCA + ABS/REL ---
     sy += 16;
     tft.setCursor(4, sy);
-    tft.setTextColor(COLOR_STATUS_LABEL, ST77XX_BLACK);
+    tft.setTextColor(COLOR_STATUS_LABEL, TFT_BLACK);
     tft.print("Safe:");
-    tft.setTextColor(state.safetyEnabled ? ST77XX_GREEN : ST77XX_RED, ST77XX_BLACK);
+    tft.setTextColor(state.safetyEnabled ? TFT_GREEN : TFT_RED, TFT_BLACK);
     tft.print(state.safetyEnabled ? "ON " : "OFF");
 
     tft.setCursor(110, sy);
-    tft.setTextColor(COLOR_STATUS_LABEL, ST77XX_BLACK);
+    tft.setTextColor(COLOR_STATUS_LABEL, TFT_BLACK);
     tft.print("PCA:");
-    tft.setTextColor(state.pcaReady ? ST77XX_GREEN : ST77XX_RED, ST77XX_BLACK);
+    tft.setTextColor(state.pcaReady ? TFT_GREEN : TFT_RED, TFT_BLACK);
     tft.print(state.pcaReady ? "ON " : "OFF");
 
     // --- Строка 3: последняя команда (как есть, до 20 символов) ---
     // Добиваем пробелами до фиксированной ширины 20 символов = 240 px при size=2.
     sy += 16;
     tft.setCursor(4, sy);
-    tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
+    tft.setTextColor(COLOR_STATUS_VALUE, TFT_BLACK);
 
     char cmdBuf[32];
     snprintf(cmdBuf, sizeof(cmdBuf), "%-20.20s", state.lastCommand);
