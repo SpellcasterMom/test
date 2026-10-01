@@ -1488,7 +1488,7 @@ void displayInit() {
         snprintf(fwBuf, sizeof(fwBuf), "FW version %lu (%s)",
                  (unsigned long)FW_VERSION, FW_VERSION_STR);
         tft.setTextSize(2);
-        tft.setTextColor(COLOR_STATUS_VALUE, TFT_BLACK);
+        tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
         tft.setCursor(4, ZONE_JOINTS_Y + HEADER_H + 66);
         tft.print(fwBuf);
     }
