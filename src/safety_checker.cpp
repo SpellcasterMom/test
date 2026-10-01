@@ -1,7 +1,7 @@
 /**
  * Project     : 6DOF arm
  * Author      : Vladimir V. Laykov aka Yago
- * Group       : УТС/Б-23-1-О
+ * Group       : УТС/б-23-1-о
  * Mentor      : Lipko I.Y.
  * Date        : 2026-09-18
  * Last modify : 2026-09-18
