@@ -180,7 +180,7 @@ public:
     LGFX(void) {
         {
             auto cfg = _bus_instance.config();
-            cfg.spi_host   = VSPI;
+            cfg.spi_host   = (spi_host_device_t)VSPI;   // VSPI — int-макрос, нужен каст
             cfg.spi_mode   = 0;
             cfg.freq_write = 40000000;
             cfg.freq_read  = 16000000;
