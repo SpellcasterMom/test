@@ -200,7 +200,7 @@ const CommandDef COMMANDS[] = {
         .description = "Kinematics diagnostics: M115 [S=1]",
         // M115 выводит журнал последнего движения для разбора кинематики:
         // цель (TARGET), кандидаты IK (SOLS), выбранное решение (CHOSEN),
-        // фактическое положение (ACTUAL) и невязку (RESIDUAL).
+        // фактическое положение (ACTUAL) и расхождение (RESIDUAL).
         // Параметр S=1 — полные цепочки J0..J6 для всех кандидатов.
         .params = {
             {'S', PARAM_INT, 0, 0},
