@@ -1396,6 +1396,8 @@ static void drawZoneHeader(int y, const char *title) {
 static float lastTCP[6]    = {99999, 99999, 99999, 99999, 99999, 99999};
 static float lastJoints[7] = {99999, 99999, 99999, 99999, 99999, 99999, 99999};
 static float lastGrip      = -1;
+static int8_t lastModeAbs  = -1;   // -1 = неизвестно, 0 = ABS, 1 = REL
+static char lastCmdShown[24] = ""; // последняя выведенная команда (анти-мерцание)
 
 static void drawField(int xLabel, int xValue, int y,
                       const char *label, float value, float &lastVal,
@@ -1453,6 +1455,8 @@ void displayInit() {
     for (int i = 0; i < 6; i++) lastTCP[i] = 99999;
     for (int i = 0; i < 7; i++) lastJoints[i] = 99999;
     lastGrip = -1;
+    lastModeAbs = -1;
+    lastCmdShown[0] = '\0';
 }
 
 /**
@@ -1513,11 +1517,16 @@ void displayUpdate() {
     tft.print(cntBuf);
 
     // Режим ABS/REL — над PCA (колонка x=110).
+    // Рисуем только при смене: безусловная перерисовка каждые 200 мс
+    // даёт видимое мерцание буквы.
     {
-        const char *modeStr = absoluteMode ? "ABS" : "REL";
-        tft.setCursor(110, sy);
-        tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
-        tft.print(modeStr);
+        int8_t m = absoluteMode ? 0 : 1;
+        if (m != lastModeAbs) {
+            lastModeAbs = m;
+            tft.setCursor(110, sy);
+            tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
+            tft.print(m == 0 ? "ABS" : "REL");
+        }
     }
 
     // --- Строка 2: Safe + PCA + ABS/REL ---
@@ -1542,6 +1551,10 @@ void displayUpdate() {
 
     char cmdBuf[32];
     snprintf(cmdBuf, sizeof(cmdBuf), "%-20.20s", state.lastCommand);
+    // Команду тоже только при смене (та же причина — мерцание).
+    if (strncmp(cmdBuf, lastCmdShown, sizeof(lastCmdShown)) != 0) {
+        strncpy(lastCmdShown, cmdBuf, sizeof(lastCmdShown) - 1);
+        lastCmdShown[sizeof(lastCmdShown) - 1] = '\0';
     // Добиваем пробелами до 20 символов (240 px)
     int cmdW = strlen(cmdBuf) * 6 * 2;
     while (cmdW < 20 * 12 && strlen(cmdBuf) < sizeof(cmdBuf) - 1) {
@@ -1549,6 +1562,7 @@ void displayUpdate() {
         cmdW = strlen(cmdBuf) * 6 * 2;
     }
     tft.print(cmdBuf);
+    }
 
     tft.endWrite();
 }
