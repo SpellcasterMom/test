@@ -1,7 +1,9 @@
 # 6DOF Robot Arm Controller
 
-Контроллер 6-осевого робота-манипулятора на ESP32 + PCA9685.
+Проект: контроллер 6-осевого робота-манипулятора на ESP32 + PCA9685.
+Автор: Vladimir V. Laykov aka Yago.
 Группа: УТС/б-23-1-о.
+Руководитель: Lipko I.Y.
 
 ## Репозиторий
 
@@ -207,10 +209,5 @@ src/
   backlash_compensator.h/.cpp — компенсация люфта
   gripper_controller.h/.cpp — управление захватом
   gcode_parser.h/.cpp     — парсер G-code
-  eeprom_storage.h/.cpp   — хранение конфигурации
+  eeprom_storage.h/.cpp — хранение конфигурации
 ```
-
-## Автор
-
-Vladimir V. Laykov aka Yago
-Научный руководитель: Lipko I.Y.
