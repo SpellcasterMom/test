@@ -79,24 +79,35 @@ void MotionInterpolator::stop() {
 bool MotionInterpolator::moveTo(const JointAngles &target, float feedrate) {
     if (!servoCtrl) return false;
 
+    // Зажим цели в лимиты серв (математический диапазон): команда вроде
+    // M104 P2=200 больше не уведёт currentAngles в ложь (серво всё равно
+    // обрезалось бы в setAngle, а состояние врало бы 200). Единая точка —
+    // накрывает G0/M104/G28 сразу, IK-решения уже зажаты в clampAngle.
+    JointAngles lim = target;
+    for (int i = 0; i < 7; i++) {
+        const ServoConfig &cfg = servoCtrl->getConfig(i);
+        lim.angles[i] = constrain(lim.angles[i],
+                                 (float)cfg.minAngle, (float)cfg.maxAngle);
+    }
+
     moving = true;
 
     bool result = false;
     switch (strategy) {
         case INTERP_LINEAR:
-            result = interpolateLinear(target, feedrate);
+            result = interpolateLinear(lim, feedrate);
             break;
         case INTERP_SEQUENTIAL:
-            result = interpolateSequential(target, feedrate);
+            result = interpolateSequential(lim, feedrate);
             break;
         case INTERP_AUTO:
         default:
-            result = interpolateAuto(target, feedrate);
+            result = interpolateAuto(lim, feedrate);
             break;
     }
 
     if (result) {
-        currentAngles = target;
+        currentAngles = lim;
     }
 
     moving = false;
