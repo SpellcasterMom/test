@@ -98,9 +98,9 @@ void GCodeParser::parseParams(GCodeCommand &cmd, String line, const CommandDef &
 
 void GCodeParser::setParamValue(GCodeCommand &cmd, char letter, int index, float val) {
     switch (letter) {
-        case 'X': cmd.pose.position.x = val;    cmd.hasPosition = true; cmd.hasX = true; break;
-        case 'Y': cmd.pose.position.y = val;    cmd.hasPosition = true; cmd.hasY = true; break;
-        case 'Z': cmd.pose.position.z = val;    cmd.hasPosition = true; cmd.hasZ = true; break;
+        case 'X': cmd.pose.position.x = val;    cmd.hasPosition = true; break;
+        case 'Y': cmd.pose.position.y = val;    cmd.hasPosition = true; break;
+        case 'Z': cmd.pose.position.z = val;    cmd.hasPosition = true; break;
         case 'A': cmd.pose.orientation.x = val; cmd.hasOrientation = true; break;
         case 'B': cmd.pose.orientation.y = val; cmd.hasOrientation = true; break;
         case 'C': cmd.pose.orientation.z = val; cmd.hasOrientation = true; break;

@@ -179,9 +179,6 @@ struct GCodeCommand {
     // Флаги наличия параметров
     bool hasPosition    = false;    // есть X, Y или Z
     bool hasOrientation = false;    // есть A, B или C
-    bool hasX           = false;    // задан X (для поосевой семантики G90/G91)
-    bool hasY           = false;    // задан Y
-    bool hasZ           = false;    // задан Z
     bool hasGripper     = false;    // есть J (gripper)
     bool hasFeedrate    = false;    // есть F (feedrate)
 
