@@ -74,7 +74,7 @@
  *   │ P3:    0     P6:    0               │
  *   │ Gripper:   50%                      │
  *   ├─────────────────────────────────────┤  y=176
- *   │ READY         ABS              123  │  статус + режим + счётчик
+ *   │ READY             ABS            123 │  статус + режим + счётчик
  *   │ Safe:ON       PCA:OFF               │  safety + PCA
  *   │ G28                                 │  последняя команда
  *   └─────────────────────────────────────┘  y=240
@@ -1512,10 +1512,11 @@ void displayUpdate() {
     tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
     tft.print(cntBuf);
 
-    // Режим ABS/REL — по центру первой строки статуса (после READY/MOVING/ERROR)
+    // Режим ABS/REL — середина первой строки статуса
+    // (x=128: зазор после READY/MOVING/ERROR, счётчик прижат вправо).
     {
         const char *modeStr = absoluteMode ? "ABS" : "REL";
-        tft.setCursor(116, sy);
+        tft.setCursor(128, sy);
         tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
         tft.print(modeStr);
     }
