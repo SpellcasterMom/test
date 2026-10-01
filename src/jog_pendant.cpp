@@ -37,15 +37,17 @@ void JogPendant::begin(MotionInterpolator *interp, JointAngles *cur,
     cur_ = cur;
     mtx_ = mtx;
     instance_ = this;
+    // E-STOP — отдельный пин, просто кнопка. Вооружён ВСЕГДА, независимо
+    // от JOG_ENABLED: стоп должен работать и при выключенном пульте.
+    pinMode(JOG_PIN_ESTOP, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(JOG_PIN_ESTOP), isrEstop, FALLING);
     if (!JOG_ENABLED) return;
     pinMode(JOG_PIN_ENC_A, INPUT_PULLUP);
     pinMode(JOG_PIN_ENC_B, INPUT_PULLUP);
     pinMode(JOG_PIN_NEXT, INPUT_PULLUP);
-    pinMode(JOG_PIN_ESTOP, INPUT_PULLUP);
     prevQ_ = (digitalRead(JOG_PIN_ENC_A) << 1) | digitalRead(JOG_PIN_ENC_B);
     attachInterrupt(digitalPinToInterrupt(JOG_PIN_ENC_A), isrEnc, CHANGE);
     attachInterrupt(digitalPinToInterrupt(JOG_PIN_ENC_B), isrEnc, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(JOG_PIN_ESTOP), isrEstop, FALLING);
 }
 
 void IRAM_ATTR JogPendant::isrEnc() {
@@ -64,14 +66,16 @@ void IRAM_ATTR JogPendant::isrEstop() {
 }
 
 void JogPendant::poll() {
-    if (!JOG_ENABLED || !interp_ || !cur_) return;
+    if (!interp_ || !cur_) return;
 
+    // E-STOP обрабатываем всегда (даже при JOG_ENABLED=false).
     if (estopISR_) {
         estopISR_ = false;
         estopHit_ = true;
         acc_ = 0;   // набранное за время стопа сбрасываем
         Serial.println("JOG: E-STOP (motion halted, servos powered)");
     }
+    if (!JOG_ENABLED) return;
 
     // Кнопка NEXT: листаем P1..P7 по кругу (debounce 200 мс).
     bool nb = digitalRead(JOG_PIN_NEXT);

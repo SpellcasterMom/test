@@ -1390,8 +1390,8 @@ void setup() {
     // При JOG_ENABLED=false — только лог, прерывания не вешаются.
     pendant.begin(&interpolator, &currentAngles, angleMutex);
     xTaskCreatePinnedToCore(pendantTask, "pendant", 4096, NULL, 2, NULL, 1);
-    Serial.println(JOG_ENABLED ? "Jog pendant: ON (pins 32/33/25/26)"
-                               : "Jog pendant: OFF");
+    Serial.println(JOG_ENABLED ? "Jog pendant: ON (pins 32/33/25), E-STOP armed (pin 26)"
+                               : "Jog pendant: manual OFF, E-STOP armed (pin 26)");
     Serial.println(JOG_ENABLED ? "Jog pendant: ON (pins 32/33/25/26)"
                                : "Jog pendant: OFF");
 
