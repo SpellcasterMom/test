@@ -116,6 +116,7 @@
 #include "backlash_compensator.h"
 #include "safety_checker.h"
 #include "gripper_controller.h"
+#include "jog_pendant.h"
 #include "eeprom_storage.h"
 
 // Пины SPI для ST7789 заданы в классе LGFX ниже (VSPI).
@@ -154,6 +155,7 @@ SafetyChecker        safety;
 // Контроллер захвата: управляет мотором захвата (сервопривод №7),
 // открывает/закрывает «пальцы».
 GripperController    gripper;
+JogPendant           pendant;   // ручной пульт: штурвал + NEXT + E-STOP
 
 // Хранилище EEPROM: сохранение и загрузка конфигурации
 EEPROMStorage        storage;
@@ -1250,6 +1252,18 @@ void core0Task(void *pvParameters) {
 }
 
 // ====================================================================
+// pendantTask — опрос ручного пульта (штурвал + кнопка NEXT).
+// E-STOP идёт мимо задачи (прерывание → interpolator.stop()).
+// ====================================================================
+void pendantTask(void *pvParameters) {
+    (void)pvParameters;
+    while (true) {
+        pendant.poll();
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+// ====================================================================
 // Core 1: дисплей
 // ====================================================================
 void core1Task(void *pvParameters) {
@@ -1371,6 +1385,15 @@ void setup() {
     interpolator.setCurrentAngles(currentAngles);
 
     interpolator.setStepCallback(onInterpolationStep);
+
+    // Ручной пульт: штурвал + NEXT + E-STOP (задача, опрос 20 мс).
+    // При JOG_ENABLED=false — только лог, прерывания не вешаются.
+    pendant.begin(&interpolator, &currentAngles, angleMutex);
+    xTaskCreatePinnedToCore(pendantTask, "pendant", 4096, NULL, 2, NULL, 1);
+    Serial.println(JOG_ENABLED ? "Jog pendant: ON (pins 32/33/25/26)"
+                               : "Jog pendant: OFF");
+    Serial.println(JOG_ENABLED ? "Jog pendant: ON (pins 32/33/25/26)"
+                               : "Jog pendant: OFF");
 
     // Инициализация SharedState
     memset(&sharedState, 0, sizeof(sharedState));
