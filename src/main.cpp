@@ -73,6 +73,7 @@
  *   │ P2:  -40     P5:    0               │
  *   │ P3:    0     P6:    0               │
  *   │ Gripper:   50%                      │
+ *   │ FW version 1 (1.0)                   │
  *   ├─────────────────────────────────────┤  y=176
  *   │ READY           ABS            123  │  статус + режим + счётчик
  *   │ Safe:ON         PCA:OFF              │  safety + PCA
@@ -793,11 +794,12 @@ void handleM115(GCodeCommand &cmd) {
         return;
     }
     Serial.printf("CMD: %s\n", diagLast.cmdText);
-    Serial.printf("KIND: %s FEED: %.0f SAFETY: %s FINGER: %.1f MODE: %s\n",
+    Serial.printf("KIND: %s FEED: %.0f SAFETY: %s FINGER: %.1f MODE: %s FW:%s\n",
                   diagLast.kind, diagLast.feedrate,
                   safety.isEnabled() ? "ON" : "OFF",
                   config.fingerLength,
-                  absoluteMode ? "ABS" : "REL");
+                  absoluteMode ? "ABS" : "REL",
+                  FW_VERSION_STR);
     Serial.printf("STRAT: %d INTERP: %s %s\n", (int)interpStrategy,
                   interpolator.getLastMode(), interpolator.getLastNote());
     Vec3 toolDir = diagToolDir(diagLast.target.orientation);
@@ -1315,6 +1317,32 @@ void setup() {
         Serial.println("Using default config");
     }
 
+    // Версия прошивки в EEPROM: залита новая (или EEPROM пуст/старого
+    // формата — тогда getStoredFwVersion()=0) → заводские + сохранить + ребут.
+    // Иначе старые DH/палец/лимиты/home из EEPROM тихо ломали бы новую логику.
+    // Home при сбросе = все сервы в 0 (DEFAULT_HOME_ANGLES).
+    {
+        uint32_t storedVer = storage.getStoredFwVersion();
+        if (storedVer != FW_VERSION) {
+            Serial.printf("FW version %lu -> %lu: factory defaults + save + reboot\n",
+                          (unsigned long)storedVer, (unsigned long)FW_VERSION);
+            config = DEFAULT_CONFIG;
+            for (int i = 0; i < 7; i++) {
+                homeAngles.angles[i] = DEFAULT_HOME_ANGLES[i];
+            }
+            servoCtrl.setConfig(config.servos);
+            ikSolver.setServoLimits(config.servos);
+            ikSolver.setFingerLength(config.fingerLength);
+            fkSolver.setFingerLength(config.fingerLength);
+            safety.setFingerLength(config.fingerLength);
+            storage.saveConfig(config, homeAngles.angles, interpStrategy);
+            delay(200);
+            ESP.restart();
+        }
+        Serial.printf("FW version %lu (%s) OK\n",
+                      (unsigned long)FW_VERSION, FW_VERSION_STR);
+    }
+
     // Проверка сохранённого дома: битый home (напр. старые нули =
     // недостижимый вылет 415мм) ломал бы первую проверку траектории.
     // Откатываемся на дефолт с предупреждением (в EEPROM не пишем).
@@ -1483,6 +1511,19 @@ void displayInit() {
     // Заголовки зон
     drawZoneHeader(ZONE_TCP_Y,    "TCP POS.");
     drawZoneHeader(ZONE_JOINTS_Y, "JOINTS");
+
+    // Версия прошивки под строкой захвата (следующая строка зоны, y=+66).
+    // Рисуем один раз здесь (константа): в displayUpdate не трогаем —
+    // так мерцания нет по построению.
+    {
+        char fwBuf[24];
+        snprintf(fwBuf, sizeof(fwBuf), "FW version %lu (%s)",
+                 (unsigned long)FW_VERSION, FW_VERSION_STR);
+        tft.setTextSize(2);
+        tft.setTextColor(COLOR_STATUS_VALUE, ST77XX_BLACK);
+        tft.setCursor(4, ZONE_JOINTS_Y + HEADER_H + 66);
+        tft.print(fwBuf);
+    }
 
     // Инициализация last-значений
     for (int i = 0; i < 6; i++) lastTCP[i] = 99999;

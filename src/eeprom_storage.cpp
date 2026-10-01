@@ -68,6 +68,7 @@ void EEPROMStorage::begin() {
 void EEPROMStorage::saveConfig(const ManipulatorConfig &config, const float homeAngles[7], InterpolationStrategy strategy) {
     EEPROMData d;
     d.magic = EEPROM_MAGIC;
+    d.fwVersion = FW_VERSION;
 
     for (int i = 0; i < 7; i++) {
         d.servos[i] = config.servos[i];
@@ -155,12 +156,14 @@ void EEPROMStorage::saveHome(const float homeAngles[7]) {
     if (d.magic != EEPROM_MAGIC) {
         d = {};
         d.magic = EEPROM_MAGIC;
+        d.fwVersion = FW_VERSION;
         for (int i = 0; i < 7; i++) {
             d.servos[i] = DEFAULT_CONFIG.servos[i];
         }
         d.workspace = DEFAULT_CONFIG.workspace;
         d.linkSafety = DEFAULT_CONFIG.linkSafety;
     }
+    d.fwVersion = FW_VERSION;   // любое сохранение штампует текущую версию
 
     for (int i = 0; i < 7; i++) {
         d.homeAngles[i] = homeAngles[i];
@@ -230,6 +233,16 @@ bool EEPROMStorage::isConfigValid() {
     EEPROMData d;
     EEPROM.get(0, d);
     return validateData(d);
+}
+
+/**
+ * getStoredFwVersion — версия прошивки из EEPROM (0 = нет/битые/старый формат).
+ */
+uint32_t EEPROMStorage::getStoredFwVersion() {
+    EEPROMData d;
+    EEPROM.get(0, d);
+    if (!validateData(d)) return 0;
+    return d.fwVersion;
 }
 
 /**
