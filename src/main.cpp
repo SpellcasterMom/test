@@ -860,7 +860,9 @@ void handleM414(GCodeCommand &cmd) {
     fkSolver.setFingerLength(len);
     ikSolver.setFingerLength(len);   // ← добавить: IK тоже должен знать длину пальца
     safety.setFingerLength(len);
-    Serial.println("OK: Finger length = " + String(len, 1));
+    config.fingerLength = len;       // ← в config, иначе M500 сохранит старое,
+                                     // а после ребута палец слетит на EEPROM-значение
+    Serial.println("OK: Finger length = " + String(len, 1) + " (M500 to save)");
 }
 
 /**
