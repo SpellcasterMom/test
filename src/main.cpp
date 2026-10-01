@@ -331,7 +331,7 @@ void handleG0(GCodeCommand &cmd) {
     sharedState.hasError = false;
     xSemaphoreGive(displayMutex);
 
-    // Эффективная поза: без A/B/C берём дефолт «палец вперёд +Y»
+    // Эффективная поза: без A/B/C берём дефолт «палец вперёд +X»
     // (DEFAULT_ORI_*). M115 покажет её же с пометкой (orient=default).
     Pose effPose = cmd.pose;
     if (!cmd.hasOrientation) {
