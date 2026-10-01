@@ -644,6 +644,20 @@ void handleM104(GCodeCommand &cmd) {
     // Синхронизируем интерполятор: иначе следующий G0 посчитает
     // траекторию и время от устаревшей точки (ложный фолбэк на SEQ).
     interpolator.setCurrentAngles(currentAngles);
+    // Пушим состояние на дисплей: иначе экран продолжает показывать
+    // старую позу (M104 идёт мимо интерполятора, sharedState не обновляется).
+    xSemaphoreTake(displayMutex, portMAX_DELAY);
+    for (int i = 0; i < 7; i++) {
+        sharedState.servoAngles[i] = currentAngles.angles[i];
+    }
+    {
+        float q[6];
+        for (int i = 0; i < 6; i++) q[i] = currentAngles.angles[i];
+        sharedState.tcpPosition = fkSolver.getEndEffector(q);
+    }
+    sharedState.gripperPercent = currentAngles.angles[6] / config.servos[6].maxAngle * 100.0f;
+    sharedState.isMoving = false;
+    sharedState.commandCount++;
     diagBegin("DIRECT", 0);
     diagLast.anglesOnly = true;
     diagEvalSol(diagLast.sols[0], currentAngles, cmd.pose);
