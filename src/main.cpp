@@ -73,6 +73,7 @@
  *   │ P2:  -40     P5:    0               │
  *   │ P3:    0     P6:    0               │
  *   │ Gripper:   50%                      │
+ *   │ FW version 1 (1.0)                   │
  *   ├─────────────────────────────────────┤  y=176
  *   │ READY           ABS            123  │  статус + режим + счётчик
  *   │ Safe:ON         PCA:OFF              │  safety + PCA
@@ -1478,6 +1479,19 @@ void displayInit() {
     // Заголовки зон
     drawZoneHeader(ZONE_TCP_Y,    "TCP POS.");
     drawZoneHeader(ZONE_JOINTS_Y, "JOINTS");
+
+    // Версия прошивки под строкой захвата (следующая строка зоны, y=+66).
+    // Рисуем один раз здесь (константа): в displayUpdate не трогаем —
+    // так мерцания нет по построению.
+    {
+        char fwBuf[24];
+        snprintf(fwBuf, sizeof(fwBuf), "FW version %lu (%s)",
+                 (unsigned long)FW_VERSION, FW_VERSION_STR);
+        tft.setTextSize(2);
+        tft.setTextColor(COLOR_STATUS_VALUE, TFT_BLACK);
+        tft.setCursor(4, ZONE_JOINTS_Y + HEADER_H + 66);
+        tft.print(fwBuf);
+    }
 
     // Инициализация last-значений
     for (int i = 0; i < 6; i++) lastTCP[i] = 99999;
