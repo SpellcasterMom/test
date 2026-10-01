@@ -37,7 +37,10 @@
  *    - isConfigValid() — проверка корректности сохранённых данных
  *
  * 4) Структура EEPROM в памяти (адрес 0):
- *    [magic][servos][homeAngles][workspace][linkSafety][backlash][fingerLength][strategy][checksum]
+ *    [magic][fwVersion][servos][homeAngles][workspace][linkSafety][backlash][fingerLength][strategy][checksum]
+ *
+ * fwVersion — версия прошивки, записавшей blob. Смена FW_VERSION делает
+ * старые blob'ы чужими: setup() сбрасывается на заводские + ребут.
  *
  * При записи данные записываются целиком через EEPROM.put() и фиксируются
  * через EEPROM.commit(). При чтении данные читаются через EEPROM.get() и
@@ -73,6 +76,7 @@
  */
 struct EEPROMData {
     uint16_t           magic;           // Магическое число для валидации (0xABCD)
+    uint32_t           fwVersion;       // Версия прошивки (FW_VERSION), записавшей blob
     ServoConfig        servos[7];       // Конфигурация 7 сервоприводов
     float              homeAngles[7];   // Домашние углы 7 сервоприводов
     WorkspaceLimits    workspace;       // Ограничения рабочей области
@@ -163,6 +167,13 @@ public:
      * @return true если magic и checksum совпадают, false в противном случае
      */
     bool isConfigValid();
+
+    /**
+     * getStoredFwVersion — версия прошивки из EEPROM.
+     * @return FW_VERSION из валидного blob'а, 0 если данных нет/битые/старый формат
+     *         (старый формат без поля версии checksum не проходит → тоже 0)
+     */
+    uint32_t getStoredFwVersion();
 
 private:
     EEPROMData data;  // Внутренний буфер для хранения прочитанных данных

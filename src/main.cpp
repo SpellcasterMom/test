@@ -760,11 +760,12 @@ void handleM115(GCodeCommand &cmd) {
         return;
     }
     Serial.printf("CMD: %s\n", diagLast.cmdText);
-    Serial.printf("KIND: %s FEED: %.0f SAFETY: %s FINGER: %.1f MODE: %s\n",
+    Serial.printf("KIND: %s FEED: %.0f SAFETY: %s FINGER: %.1f MODE: %s FW:%s\n",
                   diagLast.kind, diagLast.feedrate,
                   safety.isEnabled() ? "ON" : "OFF",
                   config.fingerLength,
-                  absoluteMode ? "ABS" : "REL");
+                  absoluteMode ? "ABS" : "REL",
+                  FW_VERSION_STR);
     Serial.printf("STRAT: %d INTERP: %s %s\n", (int)interpStrategy,
                   interpolator.getLastMode(), interpolator.getLastNote());
     Vec3 toolDir = diagToolDir(diagLast.target.orientation);
@@ -1280,6 +1281,32 @@ void setup() {
         fkSolver.setFingerLength(config.fingerLength);
         safety.setFingerLength(config.fingerLength);
         Serial.println("Using default config");
+    }
+
+    // Версия прошивки в EEPROM: залита новая (или EEPROM пуст/старого
+    // формата — тогда getStoredFwVersion()=0) → заводские + сохранить + ребут.
+    // Иначе старые DH/палец/лимиты/home из EEPROM тихо ломали бы новую логику.
+    // Home при сбросе = все сервы в 0 (DEFAULT_HOME_ANGLES).
+    {
+        uint32_t storedVer = storage.getStoredFwVersion();
+        if (storedVer != FW_VERSION) {
+            Serial.printf("FW version %lu -> %lu: factory defaults + save + reboot\n",
+                          (unsigned long)storedVer, (unsigned long)FW_VERSION);
+            config = DEFAULT_CONFIG;
+            for (int i = 0; i < 7; i++) {
+                homeAngles.angles[i] = DEFAULT_HOME_ANGLES[i];
+            }
+            servoCtrl.setConfig(config.servos);
+            ikSolver.setServoLimits(config.servos);
+            ikSolver.setFingerLength(config.fingerLength);
+            fkSolver.setFingerLength(config.fingerLength);
+            safety.setFingerLength(config.fingerLength);
+            storage.saveConfig(config, homeAngles.angles, interpStrategy);
+            delay(200);
+            ESP.restart();
+        }
+        Serial.printf("FW version %lu (%s) OK\n",
+                      (unsigned long)FW_VERSION, FW_VERSION_STR);
     }
 
     // Проверка сохранённого дома: битый home (напр. старые нули =
