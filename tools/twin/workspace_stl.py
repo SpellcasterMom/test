@@ -30,6 +30,12 @@ YMIN, YMAX = -600.0, 600.0
 ZMIN, ZMAX = 0.0, 700.0
 N = 800000
 
+# Декстерусность: воксель засчитывается, если хоть один сэмпл держит
+# инструмент в пределах TOL от эталона. Эталоны: +X (рабочий дефолт),
+# -Z (вниз, «ручка»).
+REFS = {"x": (1.0, 0.0, 0.0), "down": (0.0, 0.0, -1.0)}
+DEX_COS = math.cos(math.radians(30.0))
+
 # Колонна базы как препятствие (из чертежа robot1: высота 134;
 # диаметр оценочно 140 — померяйте штангеном, поправьте BASE_R).
 BASE_R = 70.0
@@ -61,14 +67,22 @@ def main():
     ny = int((YMAX - YMIN) / VOX)
     nz = int((ZMAX - ZMIN) / VOX)
     occ = np.zeros((nx, ny, nz), dtype=bool)
+    dex = {k: np.zeros((nx, ny, nz), dtype=bool) for k in REFS}
     for _ in range(N):
         q = [random.uniform(*LIM[i]) for i in range(6)]
         r = fk_chain(q, DH2, finger=F)
         x, y, z = r["tcp"]
         if XMIN <= x < XMAX and YMIN <= y < YMAX and ZMIN <= z < ZMAX:
-            occ[int((x - XMIN) / VOX), int((y - YMIN) / VOX),
-                int((z - ZMIN) / VOX)] = True
+            ix, iy, iz = int((x - XMIN) / VOX), int((y - YMIN) / VOX), int((z - ZMIN) / VOX)
+            occ[ix, iy, iz] = True
+            dx, dy, dz = r["dir"]
+            for k, (rx, ry, rz) in REFS.items():
+                if dx * rx + dy * ry + dz * rz >= DEX_COS:
+                    dex[k][ix, iy, iz] = True
     print(f"вокселей: {occ.sum()} (сетка {nx}x{ny}x{nz}, воксель {VOX}мм)")
+    for k in REFS:
+        print(f"декстерусных[{k}]: {dex[k].sum()} "
+              f"({100.0 * dex[k].sum() / max(occ.sum(), 1):.0f}% позиций)")
 
     # Колонна базы — твердое тело: TCP внутри неё невозможен.
     # Остаток (купол минус колонна) и даёт «шляпку гриба» с чашкой внутри.
@@ -119,6 +133,15 @@ def main():
     po = os.path.join(HERE, "reach_outer.stl")
     write_stl(po, verts, faces)
     print(f"outer: {len(faces)} тр., {os.path.getsize(po)/1e6:.1f} МБ -> {po}")
+
+    for k in REFS:
+        dk = ndimage.binary_closing(dex[k], structure=np.ones((3, 3, 3)), iterations=1)
+        verts, faces, _, _ = measure.marching_cubes(dk.astype(np.float32),
+                                                    level=0.5, spacing=sp)
+        verts = verts + origin
+        pd = os.path.join(HERE, f"dex_{k}.stl")
+        write_stl(pd, verts, faces)
+        print(f"dex_{k}: {len(faces)} тр., {os.path.getsize(pd)/1e6:.1f} МБ -> {pd}")
 
     if void_mask.sum() > 0:
         verts, faces, _, _ = measure.marching_cubes(void_mask.astype(np.float32),
