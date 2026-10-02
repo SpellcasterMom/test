@@ -55,6 +55,7 @@ def send(ser, cmd, timeout=120.0):
 
 
 def main():
+    sys.stdout.reconfigure(line_buffering=True)  # вывод сразу, без буфера
     ser = serial.Serial(PORT, BAUD, timeout=0.1)
     ser.dtr = False
     ser.rts = False

@@ -194,6 +194,7 @@ def print_banner():
 
 
 def main():
+    sys.stdout.reconfigure(line_buffering=True)  # вывод сразу, без буфера
     # Аргументы: port [baud] [startup_delay]
     port = sys.argv[1] if len(sys.argv) > 1 else find_port()
     baud = int(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_BAUD
