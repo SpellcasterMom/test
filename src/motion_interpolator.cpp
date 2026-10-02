@@ -601,6 +601,11 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
     if (!servoCtrl || !ikSolver || !fkSolver) return false;
     moving = true;
 
+    // Бюджет доводки на шаг: трекинг сходится за ~3-15 итераций (двойник),
+    // полный бюджет 100 на шаг давал рывки ~6 раз медленнее плана.
+    // Допуски те же (1мм/1°). В конце восстанавливаем (дефолт 100/1.0/1.0).
+    ikSolver->setNumericParams(25, 1.0f, 1.0f);
+
     // --- Стартовая поза TCP из текущих углов ---
     float qs[6];
     for (int i = 0; i < 6; i++) qs[i] = currentAngles.angles[i];
@@ -651,6 +656,7 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
     float posDist = sqrt(dx*dx + dy*dy + dz*dz);
     if (posDist < 0.5f && th < cartDeg2Rad(0.5f)) {
         moving = false;
+        ikSolver->setNumericParams(100, 1.0f, 1.0f);
         return true;
     }
 
@@ -665,6 +671,7 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
     }
     if (maxDelta < MIN_STEP_DEG) {
         moving = false;
+        ikSolver->setNumericParams(100, 1.0f, 1.0f);
         return true;
     }
     float maxTime = 0;
@@ -695,6 +702,7 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
     // --- Цикл по декартовым шагам ---
     for (int step = 0; step <= steps; step++) {
         if (!moving) break;
+        uint32_t stepT0 = millis();
 
         if (Serial.available()) {
             String line = "";
@@ -708,6 +716,7 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
             if (line.startsWith("M112")) {
                 moving = false;
                 setMark("CART", "stopped-M112");
+                ikSolver->setNumericParams(100, 1.0f, 1.0f);
                 return false;
             }
         }
@@ -763,6 +772,7 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
                 snprintf(note, sizeof(note), "ik-lost@%d", step);
                 setMark("CART", note);
                 moving = false;
+                ikSolver->setNumericParams(100, 1.0f, 1.0f);
                 return false;
             }
         }
@@ -772,14 +782,23 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
                      safety->getLastError().c_str());
             setMark("CART", note);
             moving = false;
+            ikSolver->setNumericParams(100, 1.0f, 1.0f);
             return false;
         }
 
         outputStep(qq);
         qPrev = qq;
-        delay((unsigned long)STEP_INTERVAL_MS);
+        // Честный темп: вычитаем время счёта шага, иначе движение
+        // идёт рывками медленнее плана (счёт ~100мс + фикс 20мс).
+        {
+            uint32_t spent = millis() - stepT0;
+            if (spent < (uint32_t)STEP_INTERVAL_MS) {
+                delay((unsigned long)(STEP_INTERVAL_MS - spent));
+            }
+        }
     }
 
+    ikSolver->setNumericParams(100, 1.0f, 1.0f);
     if (moving) {
         currentAngles = qPrev;
         char note[64];
