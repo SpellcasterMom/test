@@ -13,6 +13,7 @@
 #include "servo_controller.h"
 #include "backlash_compensator.h"
 #include "safety_checker.h"
+#include "ik_solver.h"
 
 /**
  * Тип callback-функции, вызываемой на каждом шаге интерполяции.
@@ -70,6 +71,18 @@ public:
     void setSafetyChecker(SafetyChecker *safety);
 
     /**
+     * @brief Установка решателя обратной кинематики (для moveToPose).
+     * @param ik Указатель на объект IKSolver
+     */
+    void setIKSolver(IKSolver *ik);
+
+    /**
+     * @brief Установка решателя прямой кинематики (для moveToPose).
+     * @param fk Указатель на объект FKSolver
+     */
+    void setFKSolver(FKSolver *fk);
+
+    /**
      * @brief Установка стратегии интерполяции.
      * @param strat Стратегия: INTERP_LINEAR, INTERP_SEQUENTIAL или INTERP_AUTO
      */
@@ -102,6 +115,18 @@ public:
     void stop();
 
     /**
+     * @brief Декартово движение к целевой позе TCP (для G1).
+     * TCP идёт по прямой (lerp позиции + slerp ориентации), на каждом шаге
+     * IK-доводка от предыдущего решения (трекинг), safety каждого шага.
+     * Кончик стоит на прямой с точностью IK (а не гуляет по дуге joint-интерполяции).
+     * При срыве трекинга/safety — остановка на последнем хорошем шаге, false.
+     * @param targetPose Целевая поза TCP (позиция + эйлеры ZYX + захват)
+     * @param feedrate Процент от предельной скорости (0-100, >100 = 100%).
+     * @return true если движение завершено успешно
+     */
+    bool moveToPose(const Pose &targetPose, float feedrate);
+
+    /**
      * @brief Проверка, выполняется ли движение в данный момент.
      * @return true если робот движется
      */
@@ -114,6 +139,11 @@ public:
      */
     void setCurrentAngles(const JointAngles &a) { currentAngles = a; }
 
+    /**
+     * @brief Текущие углы по версии интерполятора (после moveTo/moveToPose).
+     */
+    JointAngles getCurrentAngles() const { return currentAngles; }
+
     /** Кто ехал последним: "LIN", "SEQ" или "NONE" (движений ещё не было). */
     const char *getLastMode() const { return lastMode; }
 
@@ -124,12 +154,14 @@ private:
     ServoController      *servoCtrl;   // Контроллер сервоприводов
     BacklashCompensator  *backlash;    // Компенсатор люфта
     SafetyChecker        *safety;      // Проверка безопасности
+    IKSolver             *ikSolver;    // Решатель IK (для moveToPose)
+    FKSolver             *fkSolver;    // Решатель FK (для moveToPose)
     InterpolationStrategy strategy;    // Текущая стратегия интерполяции
     StepCallback         stepCallback; // Callback на каждом шаге (для дисплея)
 
     JointAngles currentAngles; // Текущие углы сочленений
     bool        moving;        // Флаг выполняющегося движения
-    char        lastMode[8];   // LIN / SEQ / NONE — кто ехал последним
+    char        lastMode[8];   // LIN / SEQ / CART / NONE — кто ехал последним
     char        lastNote[96];  // шаги/время/причина отказа (для M115)
 
     /** Записать метку последнего движения (для M115). */
@@ -173,4 +205,10 @@ private:
      * @param t Параметр интерполяции (0..1)
      */
     void executeStep(const JointAngles &from, const JointAngles &to, float t);
+
+    /**
+     * @brief Вывод готовых углов (для moveToPose).
+     * Люфт + setAngles + callback, интерполировать нечего.
+     */
+    void outputStep(const JointAngles &q);
 };

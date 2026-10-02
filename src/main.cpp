@@ -618,10 +618,150 @@ void handleG0(GCodeCommand &cmd) {
 }
 
 /**
- * G1 — перемещение с подачей (аналогично G0).
+ * G1 — декартово движение (прямая TCP).
+ * Чистый IK-режим: TCP идёт по прямой (lerp + slerp), IK на каждом шаге.
+ * DIRECT/MIXED — как G0 (joint-интерполяция).
  */
 void handleG1(GCodeCommand &cmd) {
-    handleG0(cmd);
+    cmd.determineMode();
+    if (cmd.mode != GCodeCommand::IK_MODE) {
+        handleG0(cmd);
+        return;
+    }
+
+    // Сброс ошибки при новой команде
+    xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
+    sharedState.hasError = false;
+    xSemaphoreGive(displayMutex);
+
+    // Эффективная поза: как в G0 (дефолт ориентации + поосевая семантика).
+    Pose effPose = cmd.pose;
+    if (!cmd.hasOrientation) {
+        effPose.orientation.x = DEFAULT_ORI_A;
+        effPose.orientation.y = DEFAULT_ORI_B;
+        effPose.orientation.z = DEFAULT_ORI_C;
+    }
+    {
+        float cq[6];
+        for (int i = 0; i < 6; i++) cq[i] = currentAngles.angles[i];
+        Vec3 curTcp = fkSolver.getEndEffector(cq);
+        if (!absoluteMode) {
+            effPose.position.x = cmd.hasX ? curTcp.x + cmd.pose.position.x : curTcp.x;
+            effPose.position.y = cmd.hasY ? curTcp.y + cmd.pose.position.y : curTcp.y;
+            effPose.position.z = cmd.hasZ ? curTcp.z + cmd.pose.position.z : curTcp.z;
+        } else {
+            if (!cmd.hasX) effPose.position.x = curTcp.x;
+            if (!cmd.hasY) effPose.position.y = curTcp.y;
+            if (!cmd.hasZ) effPose.position.z = curTcp.z;
+        }
+    }
+    // Захват: как в G0 (без J — в 0).
+    effPose.gripper = cmd.hasGripper ? cmd.pose.gripper : 0;
+
+    // Валидация конца пути (те же ворота, что G0): solveAll + min-residual
+    // + порог 10мм/15°. Сам путь считает moveToPose.
+    diagBegin("IK-CART", cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE);
+    diagLast.target = effPose;
+    diagLast.hasPos = cmd.hasPosition;
+    diagLast.hasOri = cmd.hasOrientation;
+    JointAngles solutions[4];
+    IKSolutionMeta metas[4];
+    int solCount = ikSolver.solveAll(effPose, solutions, metas);
+
+    if (solCount == 0) {
+        strncpy(diagLast.failReason, "IK solution not found",
+                sizeof(diagLast.failReason) - 1);
+        xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
+        sharedState.hasError = true;
+        snprintf(sharedState.lastError, sizeof(sharedState.lastError), "IK not found");
+        xSemaphoreGive(displayMutex);
+        Serial.println("ERROR: IK solution not found");
+        return;
+    }
+
+    for (int i = 0; i < solCount && diagLast.solCount < 4; i++) {
+        if (cmd.hasGripper) {
+            solutions[i].angles[6] = cmd.pose.gripper;
+        }
+        diagEvalSol(diagLast.sols[diagLast.solCount], solutions[i], effPose);
+        diagLast.sols[diagLast.solCount].iters = metas[i].iters;
+        diagLast.sols[diagLast.solCount].converged = metas[i].converged;
+        diagLast.sols[diagLast.solCount].seedPos = metas[i].seedPos;
+        diagLast.sols[diagLast.solCount].seedOri = metas[i].seedOri;
+        diagLast.sols[diagLast.solCount].dbgDq0 = metas[i].dbgDq0;
+        diagLast.sols[diagLast.solCount].dbgN1 = metas[i].dbgN1;
+        diagLast.solCount++;
+    }
+
+    int best = -1;
+    float bestScore = 0;
+    for (int i = 0; i < diagLast.solCount; i++) {
+        if (!diagLast.sols[i].safe) continue;
+        float score = diagLast.sols[i].dPos + diagLast.sols[i].dOri;
+        if (best < 0 || score < bestScore) {
+            best = i;
+            bestScore = score;
+        }
+    }
+    bool foundSafe = (best >= 0);
+    const float IK_POS_TOL = 10.0f;
+    const float IK_ORI_TOL = 15.0f;
+    if (foundSafe &&
+        (diagLast.sols[best].dPos > IK_POS_TOL ||
+         diagLast.sols[best].dOri > IK_ORI_TOL)) {
+        foundSafe = false;
+        char tmp[96];
+        snprintf(tmp, sizeof(tmp),
+                 "No accurate safe IK (best dPos=%.1f dOri=%.1f)",
+                 diagLast.sols[best].dPos, diagLast.sols[best].dOri);
+        strncpy(diagLast.failReason, tmp, sizeof(diagLast.failReason) - 1);
+    }
+    if (!foundSafe) {
+        if (diagLast.failReason[0] == '\0') {
+            strncpy(diagLast.failReason, "No safe IK solution",
+                    sizeof(diagLast.failReason) - 1);
+        }
+        xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
+        sharedState.hasError = true;
+        snprintf(sharedState.lastError, sizeof(sharedState.lastError), "No safe IK");
+        xSemaphoreGive(displayMutex);
+        Serial.print("ERROR: ");
+        Serial.println(diagLast.failReason);
+        return;
+    }
+    diagLast.chosen = best;
+
+    // Декартово исполнение: TCP по прямой, IK на каждом шаге.
+    float feedrate = cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE;
+    interpolator.setCurrentAngles(currentAngles);
+    if (interpolator.moveToPose(effPose, feedrate)) {
+        xSemaphoreTake(angleMutex, portMAX_DELAY);
+        // currentAngles уже обновлены внутри moveToPose; забираем итог.
+        JointAngles done = interpolator.getCurrentAngles();
+        currentAngles = done;
+        xSemaphoreGive(angleMutex);
+
+        xSemaphoreTake(displayMutex, portMAX_DELAY);
+        for (int i = 0; i < 7; i++) {
+            sharedState.servoAngles[i] = done.angles[i];
+        }
+        float q[6];
+        for (int i = 0; i < 6; i++) q[i] = done.angles[i];
+        sharedState.tcpPosition = fkSolver.getEndEffector(q);
+        sharedState.gripperPercent = done.angles[6] / config.servos[6].maxAngle * 100.0f;
+        sharedState.isMoving = false;
+        sharedState.hasError = false;
+        sharedState.commandCount++;
+        xSemaphoreGive(displayMutex);
+
+        Serial.println("OK");
+    } else {
+        xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
+        sharedState.hasError = true;
+        snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Cart move failed");
+        xSemaphoreGive(displayMutex);
+        Serial.println("ERROR: Cartesian move failed (see M115 INTERP)");
+    }
 }
 
 /**
@@ -1135,7 +1275,7 @@ void handleM502(GCodeCommand &cmd) {
 void handleHelp(GCodeCommand &cmd) {
     Serial.println("=== 6-DOF Robot Arm Commands ===");
     Serial.println("G0 X.. Y.. Z.. A.. B.. C.. J.. - Move (IK/Direct/Mixed, def A-90=tool+Y)");
-    Serial.println("G1 X.. Y.. Z.. F.. P1=.. P7=.. - Move with feedrate (same defaults)");
+    Serial.println("G1 X.. Y.. Z.. F..            - Cartesian straight line (TCP holds)");
     Serial.println("G28                           - Home all axes");
     Serial.println("G28 H1                        - Park (fold into compact position)");
     Serial.println("G90                           - Absolute mode");
@@ -1318,6 +1458,8 @@ void setup() {
     interpolator.setServoController(&servoCtrl);
     interpolator.setBacklashCompensator(&backlash);
     interpolator.setSafetyChecker(&safety);
+    interpolator.setIKSolver(&ikSolver);
+    interpolator.setFKSolver(&fkSolver);
     interpolator.setStrategy(interpStrategy);
 
     gripper.setServoController(&servoCtrl);
