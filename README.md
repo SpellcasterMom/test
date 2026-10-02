@@ -228,6 +228,10 @@ M115            # T1: dPos ≤ 1 мм, dOri — единицы градусов
   `docs-readme` (README, чертёж, cad/).
 - Открыты: `feat-jog-pendant` (ручной
   пульт: штурвал + E-STOP),
+  `feat-servo-bertos` (сервы через
+  janelia-arduino/PCA9685, без тиков),
+  `servo-adafruit-old` (слепок старого
+  Adafruit-драйвера, страховка),
   `feat-display-tftespi` (parked: TFT_eSPI).
 
 ## Структура проекта
