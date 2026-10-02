@@ -56,9 +56,36 @@ def find_port():
     return cands[0]
 
 
+def open_serial(port):
+    """Открытие без сброса ESP32 (как в demo.py): DTR/RTS до open, пауза 15с."""
+    print(f"Открываю {port} @ {BAUD} (без сброса ESP32)...")
+    ser = serial.Serial()
+    ser.port = port
+    ser.baudrate = BAUD
+    ser.bytesize = serial.EIGHTBITS
+    ser.parity = serial.PARITY_NONE
+    ser.stopbits = serial.STOPBITS_ONE
+    ser.timeout = 0.1
+    ser.dtr = False
+    ser.rts = False
+    ser.open()
+    try:
+        ser.setDTR(False)
+        ser.setRTS(False)
+    except Exception:
+        pass
+    ser.reset_input_buffer()
+    print("Порт открыт. Ждём 15 сек (setup ESP32)...")
+    time.sleep(15)
+    ser.reset_input_buffer()
+    print("готово.\n")
+    return ser
+
+
 def send(ser, cmd, timeout=120.0):
     ser.read_all()  # сброс несъеденного (чужой OK не должен подтвердить чужую команду)
     ser.write((cmd + "\n").encode())
+    ser.flush()
     t0 = time.time()
     buf = ""
     while time.time() - t0 < timeout:
@@ -77,10 +104,7 @@ def main():
     sys.stdout.reconfigure(line_buffering=True)  # вывод сразу, без буфера
     port = PORT or find_port()
     print(f"Порт: {port}")
-    ser = serial.Serial(port, BAUD, timeout=0.1)
-    ser.dtr = False
-    ser.rts = False
-    time.sleep(8)  # ESP32 проходит setup()
+    ser = open_serial(port)
     ser.read_all()
     ok, err = send(ser, "G90")
     print("G90:", "OK" if ok else err)
