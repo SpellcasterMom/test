@@ -466,14 +466,22 @@ void handleG0(GCodeCommand &cmd) {
             }
 
             // Выбираем безопасное решение с минимальной расхождением:
-            // score = dPos[мм] + 1.0·dOri[град] (вес настраивается).
+            // score = dPos[мм] + 1.0·dOri[град] + CONT_W·jump[град от текущей].
+            // Чистый min-residual клевал ветвь в 250° ради 0.3 мм
+            // (двойник: круг) — хлысты на ровном месте. CONT_W=0.02:
+            // 50° прыжок окупается лишь при +1мм/+1° точности.
             // «Первый безопасный» систематически брал худший вариант
             // (M115: [0] 2.7мм/23.8° вместо [1] 2.2мм/0.0°).
             int best = -1;
             float bestScore = 0;
             for (int i = 0; i < diagLast.solCount; i++) {
                 if (!diagLast.sols[i].safe) continue;
-                float score = diagLast.sols[i].dPos + diagLast.sols[i].dOri;
+                float jd = 0;
+                for (int j = 0; j < 6; j++) {
+                    float d = fabs(diagLast.sols[i].q.angles[j] - currentAngles.angles[j]);
+                    if (d > jd) jd = d;
+                }
+                float score = diagLast.sols[i].dPos + diagLast.sols[i].dOri + 0.02f * jd;
                 if (best < 0 || score < bestScore) {
                     best = i;
                     bestScore = score;
@@ -697,7 +705,12 @@ void handleG1(GCodeCommand &cmd) {
     float bestScore = 0;
     for (int i = 0; i < diagLast.solCount; i++) {
         if (!diagLast.sols[i].safe) continue;
-        float score = diagLast.sols[i].dPos + diagLast.sols[i].dOri;
+        float jd = 0;
+        for (int j = 0; j < 6; j++) {
+            float d = fabs(diagLast.sols[i].q.angles[j] - currentAngles.angles[j]);
+            if (d > jd) jd = d;
+        }
+        float score = diagLast.sols[i].dPos + diagLast.sols[i].dOri + 0.02f * jd;
         if (best < 0 || score < bestScore) {
             best = i;
             bestScore = score;
