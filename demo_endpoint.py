@@ -33,11 +33,31 @@ STEPS = [
     "G1 X200 Y200 Z200 A-180.0 B-0.0 C-180.0 F300",
 ]
 
-PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyUSB1"
+PORT = sys.argv[1] if len(sys.argv) > 1 else None  # None = автопоиск
 BAUD = 115200
 
 
-def send(ser, cmd, timeout=30.0):
+def find_port():
+    """Автопоиск порта ESP32 (как в demo.py)."""
+    import serial.tools.list_ports
+    cands = []
+    for p in serial.tools.list_ports.comports():
+        s = ((p.description or "") + (p.manufacturer or "")).lower()
+        if any(k in s for k in
+               ["cp210", "ch340", "ch341", "ft232", "usb-serial", "uart",
+                "silicon labs", "espressif", "esp32"]):
+            cands.append(p.device)
+    if not cands:
+        print("Порт ESP32 не найден. Укажите вручную:")
+        print("  python demo_endpoint.py /dev/ttyUSB0")
+        sys.exit(1)
+    if len(cands) > 1:
+        print(f"Портов несколько {cands}, беру {cands[0]}")
+    return cands[0]
+
+
+def send(ser, cmd, timeout=120.0):
+    ser.read_all()  # сброс несъеденного (чужой OK не должен подтвердить чужую команду)
     ser.write((cmd + "\n").encode())
     t0 = time.time()
     buf = ""
@@ -54,18 +74,23 @@ def send(ser, cmd, timeout=30.0):
 
 
 def main():
-    ser = serial.Serial(PORT, BAUD, timeout=0.1)
+    sys.stdout.reconfigure(line_buffering=True)  # вывод сразу, без буфера
+    port = PORT or find_port()
+    print(f"Порт: {port}")
+    ser = serial.Serial(port, BAUD, timeout=0.1)
     ser.dtr = False
     ser.rts = False
     time.sleep(8)  # ESP32 проходит setup()
     ser.read_all()
     ok, err = send(ser, "G90")
     print("G90:", "OK" if ok else err)
-    print(f"{'шаг':>4} {'dPos':>6} {'dOri':>6}  итог")
+    print(f"{'шаг':>4} {'dPos':>6} {'dOri':>6}  {'время':>14}  итог")
+    t_start = time.time()
     for k, cmd in enumerate(STEPS):
         ok, err = send(ser, cmd, timeout=60.0)
+        stamp = time.strftime("%H:%M:%S") + f" (+{time.time()-t_start:6.1f}c)"
         if not ok:
-            print(f"{k:>4} {'-':>6} {'-':>6}  {err}")
+            print(f"{k:>4} {'-':>6} {'-':>6}  {stamp}  {err}")
             continue
         ser.read_all()
         ser.write(b"M115\n")   # M115 не шлёт OK — читаем сырьём
@@ -73,9 +98,9 @@ def main():
         out = ser.read_all().decode(errors="ignore")
         m = re.search(r"dist=([\d.]+)mm dOri=([\d.]+)deg", out)
         if m:
-            print(f"{k:>4} {float(m.group(1)):>6.1f} {float(m.group(2)):>6.1f}  OK")
+            print(f"{k:>4} {float(m.group(1)):>6.1f} {float(m.group(2)):>6.1f}  {stamp}  OK")
         else:
-            print(f"{k:>4} {'?':>6} {'?':>6}  moved, no RESIDUAL parsed")
+            print(f"{k:>4} {'?':>6} {'?':>6}  {stamp}  moved, no RESIDUAL parsed")
     ser.close()
 
 

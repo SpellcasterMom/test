@@ -660,9 +660,27 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
         return true;
     }
 
-    // --- Грубая end-IK для оценки времени (как в linear: по joint-дельтам) ---
+    // --- Грубая end-IK для оценки времени (как в linear: по joint-дельтам).
+    // Берём ближайшую к текущей из {трекинг, геометрия}: чистый refine
+    // иногда уходит в дальнюю ветвь и раздувает timeMs в разы (рука потом
+    // ползёт еле-еле по ease-in-out, хотя путь рядом).
     JointAngles qEnd = currentAngles;
     ikSolver->refineSolution(targetPose, qEnd, nullptr);
+    {
+        JointAngles sols[4];
+        IKSolutionMeta mm[4];
+        int n = ikSolver->solveAll(targetPose, sols, mm);
+        float bd = 1e30f;
+        int bi = -1;
+        for (int k = 0; k < n; k++) {
+            float dd = cartJointDist(sols[k], currentAngles);
+            if (dd < bd) { bd = dd; bi = k; }
+        }
+        if (bi >= 0 && cartJointDist(sols[bi], currentAngles) <
+                        cartJointDist(qEnd, currentAngles)) {
+            qEnd = sols[bi];
+        }
+    }
     float maxDelta = 0;
     for (int i = 0; i < 7; i++) {
         float dd = (i < 6) ? fabs(qEnd.angles[i] - currentAngles.angles[i])

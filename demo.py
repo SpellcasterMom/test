@@ -138,6 +138,9 @@ def send_command(ser, cmd, timeout=TIMEOUT_SEC):
     """
     Отправляет G-code команду и ждёт OK / ERROR.
 
+    M114/M115/M105 в ответ шлют данные без OK — для них успех =
+    получен нетривиальный вывод (иначе вечное ожидание таймаута).
+
     Возвращает (ok, response_lines).
     """
     ser.reset_input_buffer()
@@ -147,8 +150,12 @@ def send_command(ser, cmd, timeout=TIMEOUT_SEC):
     ser.write(full_cmd.encode())
     ser.flush()
 
+    # Команды без OK в ответе
+    no_ok = full_cmd.strip().upper().startswith(("M114", "M115", "M105"))
+
     # Ждём ответа
     start = time.time()
+    last_rx = start
     response_lines = []
     result = None
 
@@ -162,6 +169,7 @@ def send_command(ser, cmd, timeout=TIMEOUT_SEC):
                 continue
 
             response_lines.append(line)
+            last_rx = time.time()
 
             # Эхо команды
             if line.startswith(">"):
@@ -178,9 +186,16 @@ def send_command(ser, cmd, timeout=TIMEOUT_SEC):
                 # Информационные ответы M105/M114 — печатаем и продолжаем ждать OK
                 print(f"      {line}")
 
+        # Команды без OK (M114/M115/M105): тишина 1.5с после вывода = готово,
+        # иначе висим весь timeout впустую (M115 молча ел 30с).
+        if no_ok and response_lines and (time.time() - last_rx) > 1.5:
+            break
+
         time.sleep(0.02)
 
     if result is None:
+        if no_ok and len(response_lines) >= 3:
+            return True, response_lines
         return False, response_lines
 
     return result, response_lines
@@ -194,6 +209,7 @@ def print_banner():
 
 
 def main():
+    sys.stdout.reconfigure(line_buffering=True)  # вывод сразу, без буфера
     # Аргументы: port [baud] [startup_delay]
     port = sys.argv[1] if len(sys.argv) > 1 else find_port()
     baud = int(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_BAUD
@@ -209,22 +225,27 @@ def main():
 
     ok_count = 0
     err_count = 0
+    t_start = time.time()
+
+    def stamp():
+        dt = time.time() - t_start
+        return time.strftime("%H:%M:%S") + f" (+{dt:6.1f}c)"
 
     try:
         print(f"Отправляю {len(DEMO_COMMANDS)} команд...\n")
 
         for idx, (cmd, description) in enumerate(DEMO_COMMANDS, 1):
-            print(f"[{idx:2}/{len(DEMO_COMMANDS)}] {description}")
+            print(f"[{idx:2}/{len(DEMO_COMMANDS)}] [{stamp()}] {description}")
             print(f"      → {cmd}")
 
             ok, lines = send_command(ser, cmd)
 
             if ok:
                 ok_count += 1
-                print(f"      ✓ OK")
+                print(f"      ✓ OK [{stamp()}]")
             else:
                 err_count += 1
-                print(f"      ✗ FAIL")
+                print(f"      ✗ FAIL [{stamp()}]")
                 for line in lines:
                     if not line.startswith(">"):
                         print(f"      | {line}")
