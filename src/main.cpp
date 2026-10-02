@@ -741,6 +741,23 @@ void handleG1(GCodeCommand &cmd) {
         currentAngles = done;
         xSemaphoreGive(angleMutex);
 
+        // CHOSEN для декарта: не min-residual (движение трекингом от текущей,
+        // а не прыжок в выбранное), а ближайший безопасный кандидат к факту.
+        {
+            int near = -1;
+            float nearD = 0;
+            for (int i = 0; i < diagLast.solCount; i++) {
+                if (!diagLast.sols[i].safe) continue;
+                float dd = 0;
+                for (int j = 0; j < 6; j++) {
+                    float d = fabs(diagLast.sols[i].q.angles[j] - done.angles[j]);
+                    if (d > dd) dd = d;
+                }
+                if (near < 0 || dd < nearD) { near = i; nearD = dd; }
+            }
+            if (near >= 0) diagLast.chosen = near;
+        }
+
         xSemaphoreTake(displayMutex, portMAX_DELAY);
         for (int i = 0; i < 7; i++) {
             sharedState.servoAngles[i] = done.angles[i];
@@ -1010,6 +1027,7 @@ void handleM115(GCodeCommand &cmd) {
     if (diagLast.chosen >= 0) {
         const char *how = "direct";
         if (strcmp(diagLast.kind, "IK") == 0) how = "min-residual";
+        else if (strcmp(diagLast.kind, "IK-CART") == 0) how = "cart-tracked";
         else if (strcmp(diagLast.kind, "MIXED") == 0) how = "single";
         Serial.printf("CHOSEN: [%d] (%s)\n", diagLast.chosen, how);
     } else {

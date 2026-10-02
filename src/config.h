@@ -50,8 +50,8 @@
 // Правило: любое изменение дефолтов (DH, палец, лимиты, home) = +1.
 // FW_VERSION_STR — человекочитаемая, для M115/boot-лога.
 // ====================================================================
-#define FW_VERSION 3
-#define FW_VERSION_STR "1.2"
+#define FW_VERSION 4
+#define FW_VERSION_STR "1.3"
 
 // ====================================================================
 // Длины звеньев (мм)
@@ -220,9 +220,9 @@ struct ManipulatorConfig {
 //   Для P7 (gripper): 0 →   0°
 const ServoConfig DEFAULT_SERVO_CONFIG[7] = {
     // id, minA, maxA, minPWM, maxPWM, speed, correction, backlash, inverted, homeOffset, {CW, CCW}
-    {0, -135, 135,  500, 2500, 30, 100, 2, false, 135, {0, 0}},   // Base         math 0 → servo 135
-    {1, -135, 135,  500, 2500, 30, 100, 1, false, 135, {0, 0}},   // Shoulder     math 0 → servo 135
-    {2, -135, 135,  500, 2500, 30, 100, 2, false, 135, {0, 0}},   // Elbow        math 0 → servo 135
+    {0, -135, 135,  500, 2500, 45, 100, 2, false, 135, {0, 0}},   // Base         math 0 → servo 135
+    {1, -135, 135,  500, 2500, 45, 100, 1, false, 135, {0, 0}},   // Shoulder     math 0 → servo 135
+    {2, -135, 135,  500, 2500, 45, 100, 2, false, 135, {0, 0}},   // Elbow        math 0 → servo 135
     {3,  -90,  90,  500, 2500, 180, 100, 1, false,  90, {0, 0}},   // Wrist pitch  math 0 → servo  90
     {4,  -90,  90,  500, 2500, 180, 100, 1, false,  90, {0, 0}},   // Wrist roll   math 0 → servo  90
     {5,  -90,  90,  500, 2500, 180, 100, 1, false,  90, {0, 0}},   // Wrist yaw    math 0 → servo  90
