@@ -37,7 +37,8 @@ PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyUSB1"
 BAUD = 115200
 
 
-def send(ser, cmd, timeout=30.0):
+def send(ser, cmd, timeout=120.0):
+    ser.read_all()  # сброс несъеденного (чужой OK не должен подтвердить чужую команду)
     ser.write((cmd + "\n").encode())
     t0 = time.time()
     buf = ""
