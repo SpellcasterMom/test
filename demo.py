@@ -138,6 +138,9 @@ def send_command(ser, cmd, timeout=TIMEOUT_SEC):
     """
     Отправляет G-code команду и ждёт OK / ERROR.
 
+    M114/M115/M105 в ответ шлют данные без OK — для них успех =
+    получен нетривиальный вывод (иначе вечное ожидание таймаута).
+
     Возвращает (ok, response_lines).
     """
     ser.reset_input_buffer()
@@ -146,6 +149,9 @@ def send_command(ser, cmd, timeout=TIMEOUT_SEC):
     full_cmd = cmd.strip() + "\n"
     ser.write(full_cmd.encode())
     ser.flush()
+
+    # Команды без OK в ответе
+    no_ok = full_cmd.strip().upper().startswith(("M114", "M115", "M105"))
 
     # Ждём ответа
     start = time.time()
@@ -181,6 +187,8 @@ def send_command(ser, cmd, timeout=TIMEOUT_SEC):
         time.sleep(0.02)
 
     if result is None:
+        if no_ok and len(response_lines) >= 3:
+            return True, response_lines
         return False, response_lines
 
     return result, response_lines
