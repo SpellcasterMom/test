@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Circle demo: TCP рисует круг r=60 в плоскости YZ (X=230 const),
-инструмент всё время +X. Валидировано двойником (accept_loops.py):
-все 20 точек dPos<=0.9, хлыстов нет (continuity-биас в выборе).
+"""Circle demo: TCP рисует круг в наклонной плоскости, инструмент +X.
+Валидировано двойником (accept_loops.py + шотган): все точки dPos<=1,
+хлыстов нет (continuity-биас в выборе).
 
-Центр (230,0,300) выбран так, чтобы весь круг лежал в декстерусной
-зоне (низко-впереди с горизонтальным инструментом — дыра лимитов,
-доказано шотганом 40 сидов).
+Круг r=100, центр (230,0,300), нормаль (0.3,0.4,0.87) — наклон по всем
+тремя осям. r=100 с X const невозможен (низ — дыра лимитов,
+доказано шотганом 40 сидов), поэтому плоскость наклонная.
+Порядок обратный (23..0) — так гладче (проверено симуляцией).
 
 Использование: python demo_circle.py [/dev/ttyUSB0]
 Требования: pip install pyserial
@@ -18,17 +19,37 @@ import math
 
 import serial
 
-CX, CY, CZ, R, N = 230.0, 0.0, 300.0, 60.0, 20
-EU = (90.0, 0.0, 90.0)
+CX, CY, CZ, R, N = 230.0, 0.0, 300.0, 100.0, 24
+NORMAL = (0.3, 0.4, 0.87)   # наклон по всем осям
+EU = (90.0, 0.0, 90.0)      # инструмент +X
+
+
+def _norm(v):
+    s = math.sqrt(sum(c * c for c in v))
+    return tuple(c / s for c in v)
+
+
+def _cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0])
+
+
+_NN = _norm(NORMAL)
+_UU = _norm(_cross(_NN, (0, 0, 1)))
+_VV = _cross(_NN, _UU)
 
 STEPS = [
     "G1 X%(x).0f Y%(y).0f Z%(z).0f A%(a).1f B%(b).1f C%(c).1f F300" % {
-        "x": CX,
-        "y": CY + R * math.cos(2 * math.pi * k / N),
-        "z": CZ + R * math.sin(2 * math.pi * k / N),
+        "x": CX + R * (_UU[0] * math.cos(2 * math.pi * k / N) +
+                       _VV[0] * math.sin(2 * math.pi * k / N)),
+        "y": CY + R * (_UU[1] * math.cos(2 * math.pi * k / N) +
+                       _VV[1] * math.sin(2 * math.pi * k / N)),
+        "z": CZ + R * (_UU[2] * math.cos(2 * math.pi * k / N) +
+                       _VV[2] * math.sin(2 * math.pi * k / N)),
         "a": EU[0], "b": EU[1], "c": EU[2],
     }
-    for k in range(N)
+    for k in list(range(N))[::-1]
 ]
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else None  # None = автопоиск
@@ -75,7 +96,8 @@ def main():
     sys.stdout.reconfigure(line_buffering=True)
     port = PORT or find_port()
     print(f"Порт: {port}")
-    print(f"Круг: центр=({CX:.0f},{CY:.0f},{CZ:.0f}) r={R:.0f}, X const, инструмент +X")
+    print(f"Круг r={R:.0f} в наклонной плоскости, центр=({CX:.0f},{CY:.0f},{CZ:.0f}),")
+    print(f"  нормаль={tuple(round(c, 2) for c in _NN)}, инструмент +X")
     ser = serial.Serial(port, BAUD, timeout=0.1)
     ser.dtr = False
     ser.rts = False
