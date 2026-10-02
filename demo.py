@@ -155,6 +155,7 @@ def send_command(ser, cmd, timeout=TIMEOUT_SEC):
 
     # Ждём ответа
     start = time.time()
+    last_rx = start
     response_lines = []
     result = None
 
@@ -168,6 +169,7 @@ def send_command(ser, cmd, timeout=TIMEOUT_SEC):
                 continue
 
             response_lines.append(line)
+            last_rx = time.time()
 
             # Эхо команды
             if line.startswith(">"):
@@ -183,6 +185,11 @@ def send_command(ser, cmd, timeout=TIMEOUT_SEC):
             if line.startswith("Angles:") or line.startswith("Position:"):
                 # Информационные ответы M105/M114 — печатаем и продолжаем ждать OK
                 print(f"      {line}")
+
+        # Команды без OK (M114/M115/M105): тишина 1.5с после вывода = готово,
+        # иначе висим весь timeout впустую (M115 молча ел 30с).
+        if no_ok and response_lines and (time.time() - last_rx) > 1.5:
+            break
 
         time.sleep(0.02)
 
