@@ -199,13 +199,12 @@ void ServoController::disable() {
         }
     }
 }
-    }
-}
 
 /**
  * Конвертация СЕРВО-угла (градусы) в ширину импульса (микросекунды).
  * Дальше ширина пишется в драйвер напрямую
  * (janelia: setChannelServoPulseDuration).
+ */
 uint16_t ServoController::angleToMicroseconds(int servoId, float angle) {
     // Извлечение параметров сервопривода из конфигурации
     float minPWM = configs[servoId].minPWM;
