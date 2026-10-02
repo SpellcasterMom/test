@@ -84,11 +84,13 @@ def main():
     ser.read_all()
     ok, err = send(ser, "G90")
     print("G90:", "OK" if ok else err)
-    print(f"{'шаг':>4} {'dPos':>6} {'dOri':>6}  итог")
+    print(f"{'шаг':>4} {'dPos':>6} {'dOri':>6}  {'время':>14}  итог")
+    t_start = time.time()
     for k, cmd in enumerate(STEPS):
         ok, err = send(ser, cmd, timeout=60.0)
+        stamp = time.strftime("%H:%M:%S") + f" (+{time.time()-t_start:6.1f}c)"
         if not ok:
-            print(f"{k:>4} {'-':>6} {'-':>6}  {err}")
+            print(f"{k:>4} {'-':>6} {'-':>6}  {stamp}  {err}")
             continue
         ser.read_all()
         ser.write(b"M115\n")   # M115 не шлёт OK — читаем сырьём
@@ -96,9 +98,9 @@ def main():
         out = ser.read_all().decode(errors="ignore")
         m = re.search(r"dist=([\d.]+)mm dOri=([\d.]+)deg", out)
         if m:
-            print(f"{k:>4} {float(m.group(1)):>6.1f} {float(m.group(2)):>6.1f}  OK")
+            print(f"{k:>4} {float(m.group(1)):>6.1f} {float(m.group(2)):>6.1f}  {stamp}  OK")
         else:
-            print(f"{k:>4} {'?':>6} {'?':>6}  moved, no RESIDUAL parsed")
+            print(f"{k:>4} {'?':>6} {'?':>6}  {stamp}  moved, no RESIDUAL parsed")
     ser.close()
 
 

@@ -218,22 +218,27 @@ def main():
 
     ok_count = 0
     err_count = 0
+    t_start = time.time()
+
+    def stamp():
+        dt = time.time() - t_start
+        return time.strftime("%H:%M:%S") + f" (+{dt:6.1f}c)"
 
     try:
         print(f"Отправляю {len(DEMO_COMMANDS)} команд...\n")
 
         for idx, (cmd, description) in enumerate(DEMO_COMMANDS, 1):
-            print(f"[{idx:2}/{len(DEMO_COMMANDS)}] {description}")
+            print(f"[{idx:2}/{len(DEMO_COMMANDS)}] [{stamp()}] {description}")
             print(f"      → {cmd}")
 
             ok, lines = send_command(ser, cmd)
 
             if ok:
                 ok_count += 1
-                print(f"      ✓ OK")
+                print(f"      ✓ OK [{stamp()}]")
             else:
                 err_count += 1
-                print(f"      ✗ FAIL")
+                print(f"      ✗ FAIL [{stamp()}]")
                 for line in lines:
                     if not line.startswith(">"):
                         print(f"      | {line}")
