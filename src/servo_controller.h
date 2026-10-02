@@ -38,7 +38,7 @@
  *
  * minAngle/maxAngle в config.h остаются в МАТЕМАТИЧЕСКОМ диапазоне
  * (-135..+135, -90..+90, 0..100). homeOffset прибавляется ВНУТРИ
- * setAngle() и angleToPulse() перед конвертацией в PWM.
+ * setAngle() и angleToMicroseconds() перед конвертацией в PWM.
  */
 class ServoController {
 public:

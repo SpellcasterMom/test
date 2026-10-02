@@ -12,20 +12,14 @@
 /**
  * Инициализация сервоконтроллера.
  *
- * Шаг 1: Создание объекта PCA9685 с I2C-адресом 0x40.
- *   Адрес 0x40 — стандартный для модулей Adafruit PCA9685.
- *   Если на плате выпаяны перемычки A0–A5, адрес может быть другим
- *   (0x41–0x7F). Адрес формируется как: 0x40 | (A5<<5 | ... | A0).
+ * Шаг 1: Wire.begin(21, 22) + 400 кГц, проба адреса 0x40
+ *   (стандартный; перемычками A0–A5 может быть другим).
  *
- * Шаг 2: pwm.begin() — инициализирует I2C-хост (Wire) и сбрасывает
- *   все регистры PCA9685 в начальное состояние.
- *
- * Шаг 3: pwm.setPWMFreq(50) — установка частоты ШИМ = 50 Гц.
+ * Шаг 2: setupSingleDevice(Wire, 0x40) + setToServoFrequency() (50 Гц).
  *   Стандартная частота для сервоприводов. Период = 20 мс.
- *   PCA9685 делит период на 4096 тиков, поэтому 1 тик ≈ 4.88 мкс.
  *   Управляющий импульс серво длится от ~1 мс (0°) до ~2 мс (180°).
  *
- * Шаг 4: Загрузка конфигураций из DEFAULT_CONFIG для каждого серво.
+ * Шаг 3: Загрузка конфигураций из DEFAULT_CONFIG для каждого серво.
  */
 void ServoController::init() {
     // I2C явно: пины ESP32 + 400 кГц (как в проверенном стенде).
@@ -63,7 +57,8 @@ void ServoController::init() {
  *   - homeOffset          — сдвиг math → servo (135° / 90° / 0°)
  *
  * minAngle/maxAngle — в МАТЕМАТИЧЕСКОМ диапазоне (-135..+135, -90..+90,
- * 0..100). homeOffset прибавляется внутри setAngle() и angleToPulse()
+ * 0..100). homeOffset прибавляется внутри setAngle()
+ * и angleToMicroseconds()
  * перед конвертацией в PWM.
  */
 void ServoController::setConfig(const ServoConfig configs[7]) {
@@ -97,9 +92,9 @@ void ServoController::setConfig(const ServoConfig configs[7]) {
  *    constrain(correctedAngle, minAngle+homeOffset, maxAngle+homeOffset)
  *    — в СЕРВО-диапазоне (после offset).
  *
- * 5. КОНВЕРТАЦИЯ В PWM: angleToPulse() → тики PCA9685.
+ * 5. КОНВЕРТАЦИЯ В PWM: angleToMicroseconds() → микросекунды.
  *
- * 6. ЗАПИСЬ В PCA9685: pwm.setPWM(channel, 0, pulse).
+ * 6. ЗАПИСЬ В PCA9685: setChannelServoPulseDuration(channel, мкс).
  *
  * 7. СОХРАНЕНИЕ: в currentAngles хранится МАТЕМАТИЧЕСКИЙ угол (q_math),
  *    а не servo — чтобы FK/IK/safety/display работали в «чистой» СК.
@@ -189,7 +184,7 @@ void ServoController::enable() {
  * Отключение сервоприводов.
  *
  * 1. Устанавливает enabled = false — дальнейшие setAngle() игнорируются.
- * 2. Обнуляет PWM на всех 7 каналах: pwm.setPWM(i, 0, 0).
+ * 2. Гасит все 7 каналов (duty 0 — постоянный LOW).
  *    При on=0, off=0 сигнал на выходе канала постоянно LOW —
  *    сервопривод получает питание, но управляющий импульс отсутствует.
  *    Серво «разжимается» и удерживает текущую позицию без усилия.
