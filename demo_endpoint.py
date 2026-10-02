@@ -33,7 +33,7 @@ STEPS = [
     "G1 X200 Y200 Z200 A-180.0 B-0.0 C-180.0 F300",
 ]
 
-PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyUSB1"
+PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyUSB0"
 BAUD = 115200
 
 
