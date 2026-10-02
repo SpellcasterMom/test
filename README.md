@@ -252,3 +252,6 @@ src/
   gcode_parser.h/.cpp     — парсер G-code
   eeprom_storage.h/.cpp — хранение конфигурации
 ```
+tools/ — питон (раннеры демо + двойник FK/IK)
+docs/ — robot1.jpg (чертёж)
+cad/ — STEP-модели + reach.stl (конверт TCP)
