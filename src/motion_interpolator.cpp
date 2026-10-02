@@ -517,15 +517,17 @@ static void cartEulerToR(float roll, float pitch, float yaw, float R[9]) {
     R[6] = -sp;   R[7] = cp*sr;            R[8] = cp*cr;
 }
 
-// R 3x3 -> эйлеры ZYX (градусы), с замком кардана (roll=0, весь угол в yaw).
+// R 3x3 -> эйлеры ZYX (градусы).
+// Замок кардана: степени сливаются — кладём всё в yaw, roll=0:
+//   pitch=+90: yaw = atan2(-R01, R02); pitch=-90: yaw = atan2(-R01, -R02).
 static void cartRToEuler(const float R[9], float &roll, float &pitch, float &yaw) {
     float sp = -R[6];
     if (sp > 0.9999f) {
         pitch = 90.0f; roll = 0.0f;
-        yaw = cartRad2Deg(atan2(R[3], R[0]));
+        yaw = cartRad2Deg(atan2(-R[1], R[2]));
     } else if (sp < -0.9999f) {
         pitch = -90.0f; roll = 0.0f;
-        yaw = cartRad2Deg(atan2(R[3], R[0]));
+        yaw = cartRad2Deg(atan2(-R[1], -R[2]));
     } else {
         pitch = cartRad2Deg(asin(sp));
         roll = cartRad2Deg(atan2(R[7], R[8]));
