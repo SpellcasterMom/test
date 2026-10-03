@@ -80,6 +80,10 @@ void EEPROMStorage::saveConfig(const ManipulatorConfig &config, const float home
     d.linkSafety = config.linkSafety;
     d.fingerLength = config.fingerLength;
     d.strategy = strategy;
+    for (int i = 0; i < MAX_FORBIDDEN_ZONES; i++) {
+        d.zones[i] = config.forbiddenZones[i];
+    }
+    d.zoneCount = config.forbiddenZoneCount;
 
     d.checksum = calculateChecksum(d);
     data = d;
@@ -125,6 +129,10 @@ bool EEPROMStorage::loadConfig(ManipulatorConfig &config, float homeAngles[7]) {
     config.workspace = d.workspace;
     config.linkSafety = d.linkSafety;
     config.fingerLength = d.fingerLength;
+    for (int i = 0; i < MAX_FORBIDDEN_ZONES; i++) {
+        config.forbiddenZones[i] = d.zones[i];
+    }
+    config.forbiddenZoneCount = d.zoneCount;
 
     return true;
 }
@@ -162,6 +170,10 @@ void EEPROMStorage::saveHome(const float homeAngles[7]) {
         }
         d.workspace = DEFAULT_CONFIG.workspace;
         d.linkSafety = DEFAULT_CONFIG.linkSafety;
+        for (int i = 0; i < MAX_FORBIDDEN_ZONES; i++) {
+            d.zones[i] = DEFAULT_CONFIG.forbiddenZones[i];
+        }
+        d.zoneCount = DEFAULT_CONFIG.forbiddenZoneCount;
     }
     d.fwVersion = FW_VERSION;   // любое сохранение штампует текущую версию
 

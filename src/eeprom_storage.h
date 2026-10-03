@@ -37,7 +37,7 @@
  *    - isConfigValid() — проверка корректности сохранённых данных
  *
  * 4) Структура EEPROM в памяти (адрес 0):
- *    [magic][fwVersion][servos][homeAngles][workspace][linkSafety][backlash][fingerLength][strategy][checksum]
+ *    [magic][fwVersion][servos][homeAngles][workspace][linkSafety][backlash][fingerLength][strategy][zones][zoneCount][checksum]
  *
  * fwVersion — версия прошивки, записавшей blob. Смена FW_VERSION делает
  * старые blob'ы чужими: setup() сбрасывается на заводские + ребут.
@@ -53,8 +53,9 @@
 #include "config.h"
 #include "types.h"
 
-/** EEPROM_SIZE — размер выделяемой памяти EEPROM (512 байт) */
-#define EEPROM_SIZE 512
+/** EEPROM_SIZE — размер выделяемой памяти EEPROM (1024 байта: blob вырос
+ *  из-за массива запретных зон, в 512 уже не влезает) */
+#define EEPROM_SIZE 1024
 
 /** EEPROM_MAGIC — магическое число для валидации структуры данных (0xABCD) */
 #define EEPROM_MAGIC 0xABCD
@@ -72,6 +73,7 @@
  *   backlash[7] — компенсация люфта 7 сервоприводов (для точного позиционирования)
  *   fingerLength — длина пальца захвата (для кинематических вычислений)
  *   strategy    — стратегия интерполяции движений
+ *   zones/zoneCount — запретные зоны (zones[0] = конструктив колонны)
  *   checksum    — контрольная сумма для проверки целостности данных
  */
 struct EEPROMData {
@@ -84,6 +86,8 @@ struct EEPROMData {
     float              backlash[7];     // Компенсация люфта 7 сервоприводов
     float              fingerLength;    // Длина пальца захвата
     InterpolationStrategy strategy;     // Стратегия интерполяции
+    ForbiddenZone      zones[MAX_FORBIDDEN_ZONES];  // Запретные зоны (0 = конструктив)
+    int                zoneCount;       // Количество запретных зон
     uint16_t           checksum;        // Контрольная сумма (в самом конце структуры)
 };
 

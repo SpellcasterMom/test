@@ -1324,6 +1324,14 @@ void handleM502(GCodeCommand &cmd) {
     ikSolver.setFingerLength(config.fingerLength);   // ← добавить
     fkSolver.setFingerLength(config.fingerLength);
     safety.setFingerLength(config.fingerLength);
+    // Заводские зоны (включая конструктив) — в рантайм safety.
+    safety.clearForbiddenZones();
+    for (int i = 0; i < config.forbiddenZoneCount && i < MAX_FORBIDDEN_ZONES; i++) {
+        const ForbiddenZone &z = config.forbiddenZones[i];
+        if (z.active) {
+            safety.addForbiddenZone(z.xMin, z.xMax, z.yMin, z.yMax, z.zMin, z.zMax);
+        }
+    }
     Serial.println("OK: Factory defaults loaded");
 }
 
@@ -1567,6 +1575,42 @@ void setup() {
         }
         Serial.printf("FW version %lu (%s) OK\n",
                       (unsigned long)FW_VERSION, FW_VERSION_STR);
+    }
+
+    // Запретные зоны: конфиг -> рантайм safety, плюс конструктив.
+    // Зоны живут только в рантайме: переносим сохранённые, затем проверяем
+    // конструктив колонны (DEFAULT_CONSTRUCT_ZONE): нет такой — добавляем
+    // и сохраняем в EEPROM (чтобы была сразу забита и переживала ребут).
+    safety.clearForbiddenZones();
+    for (int i = 0; i < config.forbiddenZoneCount && i < MAX_FORBIDDEN_ZONES; i++) {
+        const ForbiddenZone &z = config.forbiddenZones[i];
+        if (z.active) {
+            safety.addForbiddenZone(z.xMin, z.xMax, z.yMin, z.yMax, z.zMin, z.zMax);
+        }
+    }
+    {
+        const ForbiddenZone &cz = DEFAULT_CONSTRUCT_ZONE;
+        bool hasConstruct = false;
+        for (int i = 0; i < safety.getZoneCount(); i++) {
+            float x1, x2, y1, y2, z1, z2;
+            bool act = false;
+            if (safety.getForbiddenZone(i, x1, x2, y1, y2, z1, z2, act) &&
+                fabs(x1 - cz.xMin) < 1.0f && fabs(x2 - cz.xMax) < 1.0f &&
+                fabs(y1 - cz.yMin) < 1.0f && fabs(y2 - cz.yMax) < 1.0f &&
+                fabs(z1 - cz.zMin) < 1.0f && fabs(z2 - cz.zMax) < 1.0f) {
+                hasConstruct = true;
+                break;
+            }
+        }
+        if (!hasConstruct) {
+            Serial.println("Construct zone missing: adding [-65,65]x[-65,65]x[0,180] + save");
+            safety.addForbiddenZone(cz.xMin, cz.xMax, cz.yMin, cz.yMax, cz.zMin, cz.zMax);
+            if (config.forbiddenZoneCount < MAX_FORBIDDEN_ZONES) {
+                config.forbiddenZones[config.forbiddenZoneCount] = cz;
+                config.forbiddenZoneCount++;
+                storage.saveConfig(config, homeAngles.angles, interpStrategy);
+            }
+        }
     }
 
     // Проверка сохранённого дома: битый home (напр. старые нули =

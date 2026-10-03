@@ -50,8 +50,8 @@
 // Правило: любое изменение дефолтов (DH, палец, лимиты, home) = +1.
 // FW_VERSION_STR — человекочитаемая, для M115/boot-лога.
 // ====================================================================
-#define FW_VERSION 4
-#define FW_VERSION_STR "1.3"
+#define FW_VERSION 5
+#define FW_VERSION_STR "1.4"
 
 // ====================================================================
 // Длины звеньев (мм)
@@ -188,6 +188,12 @@ struct ForbiddenZone {
 // Максимальное количество запретных зон
 const int MAX_FORBIDDEN_ZONES = 10;
 
+// Конструктив: колонна базы как запретная зона по умолчанию.
+// Параллелепипед X/Y ±65 (квадрат 130, центр в 0), Z 0..180,
+// грани по координатным плоскостям. Рука не должна входить в железо.
+// Проверяется на старте: если такой зоны нет — добавляется и сохраняется.
+const ForbiddenZone DEFAULT_CONSTRUCT_ZONE = {-65, 65, -65, 65, 0, 180, true};
+
 // ====================================================================
 // Полная конфигурация манипулятора
 // ====================================================================
@@ -246,8 +252,8 @@ const ManipulatorConfig DEFAULT_CONFIG = {
     },
     .workspace = WORKSPACE,
     .linkSafety = DEFAULT_LINK_SAFETY,
-    .forbiddenZones = {},
-    .forbiddenZoneCount = 0,
+    .forbiddenZones = {DEFAULT_CONSTRUCT_ZONE},
+    .forbiddenZoneCount = 1,
     .fingerLength = GRIPPER_FINGER_LENGTH,
 };
 
