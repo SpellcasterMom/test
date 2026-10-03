@@ -484,8 +484,11 @@ void handleG0(GCodeCommand &cmd) {
             int best = -1;
             float bestScore = 0;
             // Порог высотного штрафа: ниже — предпочитаем верхние ветви.
+            // Срезка min(15): в честно-низкой работе все ветви внизу,
+            // штраф у всех максимальный и одинаковый — решает расхождение.
             const float HEIGHT_Z_REF = 150.0f;   // мм
-            const float HEIGHT_W = 0.05f;        // штрафа за мм ниже порога
+            const float HEIGHT_W = 0.15f;        // штрафа за мм ниже порога
+            const float HEIGHT_MAX = 15.0f;      // потолок штрафа
             for (int i = 0; i < diagLast.solCount; i++) {
                 if (!diagLast.sols[i].safe) continue;
                 float jd = 0;
@@ -495,6 +498,7 @@ void handleG0(GCodeCommand &cmd) {
                 }
                 float hPen = diagLast.sols[i].minZ < HEIGHT_Z_REF
                     ? HEIGHT_W * (HEIGHT_Z_REF - diagLast.sols[i].minZ) : 0.0f;
+                if (hPen > HEIGHT_MAX) hPen = HEIGHT_MAX;
                 float score = diagLast.sols[i].dPos + diagLast.sols[i].dOri + 0.02f * jd + hPen;
                 if (best < 0 || score < bestScore) {
                     best = i;
@@ -718,8 +722,11 @@ void handleG1(GCodeCommand &cmd) {
     int best = -1;
     float bestScore = 0;
     // Порог высотного штрафа: ниже — предпочитаем верхние ветви.
+    // Срезка min(15): в честно-низкой работе все ветви внизу,
+    // штраф у всех максимальный и одинаковый — решает расхождение.
     const float HEIGHT_Z_REF = 150.0f;   // мм
-    const float HEIGHT_W = 0.05f;        // штрафа за мм ниже порога
+    const float HEIGHT_W = 0.15f;        // штрафа за мм ниже порога
+    const float HEIGHT_MAX = 15.0f;      // потолок штрафа
     for (int i = 0; i < diagLast.solCount; i++) {
         if (!diagLast.sols[i].safe) continue;
         float jd = 0;
@@ -729,6 +736,7 @@ void handleG1(GCodeCommand &cmd) {
         }
         float hPen = diagLast.sols[i].minZ < HEIGHT_Z_REF
             ? HEIGHT_W * (HEIGHT_Z_REF - diagLast.sols[i].minZ) : 0.0f;
+        if (hPen > HEIGHT_MAX) hPen = HEIGHT_MAX;
         float score = diagLast.sols[i].dPos + diagLast.sols[i].dOri + 0.02f * jd + hPen;
         if (best < 0 || score < bestScore) {
             best = i;
