@@ -789,13 +789,16 @@ bool IKSolver::solve6(const float A[6][6], const float b[6], float x[6]) {
  * Возвращает лучшее найденное (не обязательно последнее) q.
  * Захват (angles[6]) не трогается.
  */
-bool IKSolver::refineSolution(const Pose &target, JointAngles &q, IKSolutionMeta *meta) {
+/**
+ * Численное уточнение по матричной цели (ядро DLS, без эйлеров).
+ * Вектор ошибки: позиция TCP (мм) + axis-angle(Rt·Rᵀ)×вес —
+ * непрерывная метрика, без разрывов эйлеровой свёртки (±180°),
+ * которые давали мусорные всплески якобиана («большой градиент»).
+ * Эйлеры живут только на границах (G-code/M115); внутри — матрицы.
+ */
+bool IKSolver::refineSolutionM(const Vec3 &pt, const Mat4 &Rt,
+                               JointAngles &q, IKSolutionMeta *meta) {
     if (meta) { meta->iters = 0; meta->converged = false; meta->dbgDq0 = -1; meta->dbgN1 = -1; }
-
-    Mat4 Rt = eulerToMatrix(target.orientation.x * DEG_TO_RAD,
-                            target.orientation.y * DEG_TO_RAD,
-                            target.orientation.z * DEG_TO_RAD);
-    Vec3 pt = target.position;
 
     float qr[6], qmin[6], qmax[6];
     for (int i = 0; i < 6; i++) {
@@ -931,4 +934,16 @@ bool IKSolver::refineSolution(const Pose &target, JointAngles &q, IKSolutionMeta
 
     if (meta) { meta->iters = it; meta->converged = converged; }
     return converged;
+}
+
+/**
+ * Обёртка для позы: единственный перевод эйлеры→матрица на входе,
+ * дальше всё матричное (см. refineSolutionM).
+ */
+bool IKSolver::refineSolution(const Pose &target, JointAngles &q,
+                              IKSolutionMeta *meta) {
+    Mat4 Rt = eulerToMatrix(target.orientation.x * DEG_TO_RAD,
+                            target.orientation.y * DEG_TO_RAD,
+                            target.orientation.z * DEG_TO_RAD);
+    return refineSolutionM(target.position, Rt, q, meta);
 }

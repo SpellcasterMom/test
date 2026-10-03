@@ -132,6 +132,14 @@ public:
     bool refineSolution(const Pose &target, JointAngles &q,
                         IKSolutionMeta *meta = nullptr);
 
+    /**
+     * Численное уточнение по матричной цели (ядро DLS, см. .cpp).
+     * @param pt — целевая позиция TCP (мм)
+     * @param Rt — целевая ориентация (матрица 4x4, блок 3x3)
+     */
+    bool refineSolutionM(const Vec3 &pt, const Mat4 &Rt, JointAngles &q,
+                         IKSolutionMeta *meta = nullptr);
+
     /** Настройка численного решателя: лимит итераций и допуски. */
     void setNumericParams(int maxIter, float tolPosMM, float tolOriDeg);
 
