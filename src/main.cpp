@@ -262,6 +262,7 @@ struct DiagSol {
     Vec3 dir;               // FK направление пальца
     float dPos = 0;         // |TCP - TARGET| (мм)
     float dOri = 0;         // угол между dir и заданным toolDir (град)
+    float minZ = 0;         // минимальная Z цепочки J1..J6 (для высотного штрафа)
     bool safe = false;      // прошёл safety.checkAllLinks
     char safeErr[48];       // причина отказа safety
     int iters = 0;          // итераций DLS-уточнения
@@ -328,6 +329,14 @@ static void diagEvalSol(DiagSol &s, const JointAngles &q, const Pose &target) {
     float dz = s.tcp.z - target.position.z;
     s.dPos = sqrt(dx*dx + dy*dy + dz*dz);
     s.dOri = diagOriErr(s.dir, diagToolDir(target.orientation));
+    // Минимальная высота цепочки J2..J6 (без J0/J1: база и плечо всегда
+    // высоко — сигнал «утопленника» несут локоть и ниже).
+    // Высотный штраф в выборе предпочитает elbow-up: утопленник с локтем
+    // на z=17 проигрывает высокой ветви, вверху штраф нулевой.
+    s.minZ = s.joints[2].z;
+    for (int i = 3; i <= 6; i++) {
+        if (s.joints[i].z < s.minZ) s.minZ = s.joints[i].z;
+    }
     if (!safety.isEnabled()) {
         s.safe = true;
         s.safeErr[0] = '\0';
@@ -474,6 +483,9 @@ void handleG0(GCodeCommand &cmd) {
             // (M115: [0] 2.7мм/23.8° вместо [1] 2.2мм/0.0°).
             int best = -1;
             float bestScore = 0;
+            // Порог высотного штрафа: ниже — предпочитаем верхние ветви.
+            const float HEIGHT_Z_REF = 150.0f;   // мм
+            const float HEIGHT_W = 0.05f;        // штрафа за мм ниже порога
             for (int i = 0; i < diagLast.solCount; i++) {
                 if (!diagLast.sols[i].safe) continue;
                 float jd = 0;
@@ -481,7 +493,9 @@ void handleG0(GCodeCommand &cmd) {
                     float d = fabs(diagLast.sols[i].q.angles[j] - currentAngles.angles[j]);
                     if (d > jd) jd = d;
                 }
-                float score = diagLast.sols[i].dPos + diagLast.sols[i].dOri + 0.02f * jd;
+                float hPen = diagLast.sols[i].minZ < HEIGHT_Z_REF
+                    ? HEIGHT_W * (HEIGHT_Z_REF - diagLast.sols[i].minZ) : 0.0f;
+                float score = diagLast.sols[i].dPos + diagLast.sols[i].dOri + 0.02f * jd + hPen;
                 if (best < 0 || score < bestScore) {
                     best = i;
                     bestScore = score;
@@ -703,6 +717,9 @@ void handleG1(GCodeCommand &cmd) {
 
     int best = -1;
     float bestScore = 0;
+    // Порог высотного штрафа: ниже — предпочитаем верхние ветви.
+    const float HEIGHT_Z_REF = 150.0f;   // мм
+    const float HEIGHT_W = 0.05f;        // штрафа за мм ниже порога
     for (int i = 0; i < diagLast.solCount; i++) {
         if (!diagLast.sols[i].safe) continue;
         float jd = 0;
@@ -710,7 +727,9 @@ void handleG1(GCodeCommand &cmd) {
             float d = fabs(diagLast.sols[i].q.angles[j] - currentAngles.angles[j]);
             if (d > jd) jd = d;
         }
-        float score = diagLast.sols[i].dPos + diagLast.sols[i].dOri + 0.02f * jd;
+        float hPen = diagLast.sols[i].minZ < HEIGHT_Z_REF
+            ? HEIGHT_W * (HEIGHT_Z_REF - diagLast.sols[i].minZ) : 0.0f;
+        float score = diagLast.sols[i].dPos + diagLast.sols[i].dOri + 0.02f * jd + hPen;
         if (best < 0 || score < bestScore) {
             best = i;
             bestScore = score;
@@ -1026,7 +1045,7 @@ void handleM115(GCodeCommand &cmd) {
         }
         Serial.printf("\n    %s", s.safe ? "SAFE:OK" : "SAFE:FAIL");
         if (!s.safe) Serial.printf("(%s)", s.safeErr);
-        Serial.printf(" CLAMP:%s", clamp[0] ? clamp : "-");
+        Serial.printf(" CLAMP:%s minZ=%.0f", clamp[0] ? clamp : "-", s.minZ);
         if (!diagLast.anglesOnly) {
             Serial.printf(" NLS:%s/%dit", s.converged ? "ok" : "fail", s.iters);
             if (!s.converged) Serial.printf(" seed=%.1fmm/%.1fdeg", s.seedPos, s.seedOri);
