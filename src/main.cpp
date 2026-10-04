@@ -70,9 +70,9 @@
  *   ┌─────────────────────────────────────┐  y=0
  *   │ TCP POS.                            │  заголовок
  *   ├─────────────────────────────────────┤  y=16
- *   │ X:   415mm                          │
- *   │ Y:     0mm                          │
- *   │ Z:   160mm                          │
+ *   │ X:   415mm      A:    90         │
+ *   │ Y:     0mm      B:     0         │
+ *   │ Z:   160mm      C:    90         │
  *   ├─────────────────────────────────────┤  y=72
  *   │ JOINTS                              │  заголовок
  *   ├─────────────────────────────────────┤  y=88
@@ -1820,6 +1820,26 @@ static void drawField(int xLabel, int xValue, int y,
     tft.print(buf);
 }
 
+/**
+ * toolEulerZYX() — ориентация инструмента (R06) в эйлеры ZYX, градусы.
+ * Та же конвенция, что G-code A/B/C (R = Rz·Ry·Rx).
+ */
+static void toolEulerZYX(const float q[6], float &a, float &b, float &c) {
+    Mat4 R = fkSolver.getRotationMatrix(q, 5);
+    float sp = -R.m[2][0];
+    if (sp > 0.9999f) {
+        b = 90.0f; a = 0.0f;
+        c = atan2(-R.m[0][1], R.m[0][2]) * 180.0f / 3.14159265f;
+    } else if (sp < -0.9999f) {
+        b = -90.0f; a = 0.0f;
+        c = atan2(-R.m[0][1], -R.m[0][2]) * 180.0f / 3.14159265f;
+    } else {
+        b = asin(sp) * 180.0f / 3.14159265f;
+        a = atan2(R.m[2][1], R.m[2][2]) * 180.0f / 3.14159265f;
+        c = atan2(R.m[1][0], R.m[0][0]) * 180.0f / 3.14159265f;
+    }
+}
+
 // ====================================================================
 // Дисплей: displayInit() и displayUpdate()
 // ====================================================================
@@ -1887,10 +1907,17 @@ void displayUpdate() {
 
     tft.startWrite();
 
-    // === TCP Position Zone (3 строки, +2 px от заголовка) ===
+    // === TCP Position Zone (3 строки × 2 колонки: слева XYZ, справа A/B/C) ===
+    float qq[6];
+    for (int i = 0; i < 6; i++) qq[i] = state.servoAngles[i];
+    float ea, eb, ec;
+    toolEulerZYX(qq, ea, eb, ec);
     drawField(4, 30, ZONE_TCP_Y + HEADER_H + 2,  "X:", state.tcpPosition.x, lastTCP[0], COLOR_TCP, "mm");
+    drawField(124, 160, ZONE_TCP_Y + HEADER_H + 2,  "A:", ea, lastTCP[3], COLOR_TCP, "");
     drawField(4, 30, ZONE_TCP_Y + HEADER_H + 18, "Y:", state.tcpPosition.y, lastTCP[1], COLOR_TCP, "mm");
+    drawField(124, 160, ZONE_TCP_Y + HEADER_H + 18, "B:", eb, lastTCP[4], COLOR_TCP, "");
     drawField(4, 30, ZONE_TCP_Y + HEADER_H + 34, "Z:", state.tcpPosition.z, lastTCP[2], COLOR_TCP, "mm");
+    drawField(124, 160, ZONE_TCP_Y + HEADER_H + 34, "C:", ec, lastTCP[5], COLOR_TCP, "");
 
     // === Joints Zone (4 строки × 2 колонки, +2 px от заголовка) ===
     drawField(4,   40,  ZONE_JOINTS_Y + HEADER_H + 2,  "P1:", state.servoAngles[0], lastJoints[0], COLOR_JOINT, "");
