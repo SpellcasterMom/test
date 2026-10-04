@@ -70,9 +70,9 @@
  *   ┌─────────────────────────────────────┐  y=0
  *   │ TCP POS.                            │  заголовок
  *   ├─────────────────────────────────────┤  y=16
- *   │ X:   415mm   Roll:   90        │
- *   │ Y:     0mm   Pitch:   0        │
- *   │ Z:   160mm   Yaw:    90        │
+ *   │ X:   415mm   Roll:        90   │
+ *   │ Y:     0mm   Pitch:        0   │
+ *   │ Z:   160mm   Yaw:         90   │
  *   ├─────────────────────────────────────┤  y=72
  *   │ JOINTS                              │  заголовок
  *   ├─────────────────────────────────────┤  y=88
@@ -1821,6 +1821,30 @@ static void drawField(int xLabel, int xValue, int y,
 }
 
 /**
+ * drawFieldR() — как drawField, но число прижато ВПРАВО к xRight.
+ * Формат "%4.0f" всегда даёт ровно 4 символа (наши диапазоны ±180/0-100),
+ * поэтому курсор = xRight - 48, хвостов не остаётся.
+ */
+static void drawFieldR(int xLabel, int xRight, int y,
+                       const char *label, float value, float &lastVal,
+                       uint16_t color) {
+    if (fabs(value - lastVal) < 0.5f) return;
+    lastVal = value;
+
+    tft.setTextSize(2);
+
+    tft.setTextColor(COLOR_FIELD_LABEL, TFT_BLACK);
+    tft.setCursor(xLabel, y);
+    tft.print(label);
+
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%4.0f", value);
+    tft.setTextColor(color, TFT_BLACK);
+    tft.setCursor(xRight - 48, y);
+    tft.print(buf);
+}
+
+/**
  * toolEulerZYX() — ориентация инструмента (R06) в эйлеры ZYX, градусы.
  * Та же конвенция, что G-code A/B/C (R = Rz·Ry·Rx).
  */
@@ -1915,21 +1939,21 @@ void displayUpdate() {
     float ea, eb, ec;
     toolEulerZYX(qq, ea, eb, ec);
     drawField(4, 30, ZONE_TCP_Y + HEADER_H + 2,  "X:", state.tcpPosition.x, lastTCP[0], COLOR_TCP, "mm");
-    drawField(92, 168, ZONE_TCP_Y + HEADER_H + 2,  "Roll:", ea, lastTCP[3], COLOR_TCP, "");
+    drawFieldR(104, 232, ZONE_TCP_Y + HEADER_H + 2,  "Roll:", ea, lastTCP[3], COLOR_TCP);
     drawField(4, 30, ZONE_TCP_Y + HEADER_H + 18, "Y:", state.tcpPosition.y, lastTCP[1], COLOR_TCP, "mm");
-    drawField(92, 168, ZONE_TCP_Y + HEADER_H + 18, "Pitch:", eb, lastTCP[4], COLOR_TCP, "");
+    drawFieldR(104, 232, ZONE_TCP_Y + HEADER_H + 18, "Pitch:", eb, lastTCP[4], COLOR_TCP, "");
     drawField(4, 30, ZONE_TCP_Y + HEADER_H + 34, "Z:", state.tcpPosition.z, lastTCP[2], COLOR_TCP, "mm");
-    drawField(92, 168, ZONE_TCP_Y + HEADER_H + 34, "Yaw:", ec, lastTCP[5], COLOR_TCP, "");
+    drawFieldR(104, 232, ZONE_TCP_Y + HEADER_H + 34, "Yaw:", ec, lastTCP[5], COLOR_TCP, "");
 
     // === Joints Zone (4 строки × 2 колонки, +2 px от заголовка) ===
     drawField(4,   40,  ZONE_JOINTS_Y + HEADER_H + 2,  "P1:", state.servoAngles[0], lastJoints[0], COLOR_JOINT, "");
-    drawField(124, 160, ZONE_JOINTS_Y + HEADER_H + 2,  "P4:", state.servoAngles[3], lastJoints[3], COLOR_JOINT, "");
+    drawFieldR(124, 232, ZONE_JOINTS_Y + HEADER_H + 2,  "P4:", state.servoAngles[3], lastJoints[3], COLOR_JOINT);
 
     drawField(4,   40,  ZONE_JOINTS_Y + HEADER_H + 18, "P2:", state.servoAngles[1], lastJoints[1], COLOR_JOINT, "");
-    drawField(124, 160, ZONE_JOINTS_Y + HEADER_H + 18, "P5:", state.servoAngles[4], lastJoints[4], COLOR_JOINT, "");
+    drawFieldR(124, 232, ZONE_JOINTS_Y + HEADER_H + 18, "P5:", state.servoAngles[4], lastJoints[4], COLOR_JOINT, "");
 
     drawField(4,   40,  ZONE_JOINTS_Y + HEADER_H + 34, "P3:", state.servoAngles[2], lastJoints[2], COLOR_JOINT, "");
-    drawField(124, 160, ZONE_JOINTS_Y + HEADER_H + 34, "P6:", state.servoAngles[5], lastJoints[5], COLOR_JOINT, "");
+    drawFieldR(124, 232, ZONE_JOINTS_Y + HEADER_H + 34, "P6:", state.servoAngles[5], lastJoints[5], COLOR_JOINT, "");
 
     drawField(4, 100, ZONE_JOINTS_Y + HEADER_H + 50, "Gripper:", state.gripperPercent, lastGrip, COLOR_GRIPPER, "%");
 
