@@ -70,9 +70,9 @@
  *   ┌─────────────────────────────────────┐  y=0
  *   │ TCP POS.                            │  заголовок
  *   ├─────────────────────────────────────┤  y=16
- *   │ X:   415mm   Roll:        90   │
- *   │ Y:     0mm   Pitch:        0   │
- *   │ Z:   160mm   Yaw:         90   │
+ *   │ X:   415mm    Roll:        90  │
+ *   │ Y:     0mm    Pitch:        0  │
+ *   │ Z:   160mm    Yaw:         90  │
  *   ├─────────────────────────────────────┤  y=72
  *   │ JOINTS                              │  заголовок
  *   ├─────────────────────────────────────┤  y=88
@@ -1812,9 +1812,11 @@ static void drawField(int xLabel, int xValue, int y,
     tft.setCursor(xLabel, y);
     tft.print(label);
 
-    // Число — фиксированное поле, знак "-" не сдвигает цифры
+    // Число — фиксированное поле, знак "-" не сдвигает цифры.
+    // Без хвостового пробела: он съедал зазор до правой колонки
+    // (все поля и так фиксированной ширины, чистить нечего).
     char buf[16];
-    snprintf(buf, sizeof(buf), "%4.0f%s ", value, unit);
+    snprintf(buf, sizeof(buf), "%4.0f%s", value, unit);
     tft.setTextColor(color, TFT_BLACK);
     tft.setCursor(xValue, y);
     tft.print(buf);
@@ -1932,18 +1934,19 @@ void displayUpdate() {
     tft.startWrite();
 
     // === TCP Position Zone (3 строки × 2 колонки: слева XYZ, справа Roll/Pitch/Yaw) ===
-    // Правая колонка ужата (метки x=92, значения x=168): полные слова
-    // Roll:/Pitch:/Yaw: иначе не влезают. Минус держит формат %4.0f.
+    // Раскладка по пикселям (шрифт 12px/знак): левые значения до x=114
+    // ("-500mm"), метки с x=116 ("Pitch:" до 188), значения 188..236.
+    // Правая колонка ужата, иначе не влезает в 240.
     float qq[6];
     for (int i = 0; i < 6; i++) qq[i] = state.servoAngles[i];
     float ea, eb, ec;
     toolEulerZYX(qq, ea, eb, ec);
     drawField(4, 30, ZONE_TCP_Y + HEADER_H + 2,  "X:", state.tcpPosition.x, lastTCP[0], COLOR_TCP, "mm");
-    drawFieldR(104, 232, ZONE_TCP_Y + HEADER_H + 2,  "Roll:", ea, lastTCP[3], COLOR_TCP);
+    drawFieldR(116, 236, ZONE_TCP_Y + HEADER_H + 2,  "Roll:", ea, lastTCP[3], COLOR_TCP);
     drawField(4, 30, ZONE_TCP_Y + HEADER_H + 18, "Y:", state.tcpPosition.y, lastTCP[1], COLOR_TCP, "mm");
-    drawFieldR(104, 232, ZONE_TCP_Y + HEADER_H + 18, "Pitch:", eb, lastTCP[4], COLOR_TCP);
+    drawFieldR(116, 236, ZONE_TCP_Y + HEADER_H + 18, "Pitch:", eb, lastTCP[4], COLOR_TCP);
     drawField(4, 30, ZONE_TCP_Y + HEADER_H + 34, "Z:", state.tcpPosition.z, lastTCP[2], COLOR_TCP, "mm");
-    drawFieldR(104, 232, ZONE_TCP_Y + HEADER_H + 34, "Yaw:", ec, lastTCP[5], COLOR_TCP);
+    drawFieldR(116, 236, ZONE_TCP_Y + HEADER_H + 34, "Yaw:", ec, lastTCP[5], COLOR_TCP);
 
     // === Joints Zone (4 строки × 2 колонки, +2 px от заголовка) ===
     drawField(4,   40,  ZONE_JOINTS_Y + HEADER_H + 2,  "P1:", state.servoAngles[0], lastJoints[0], COLOR_JOINT, "");
