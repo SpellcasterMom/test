@@ -1388,6 +1388,12 @@ void handleM502(GCodeCommand &cmd) {
  */
 void handleHelp(GCodeCommand &cmd) {
     Serial.println("=== 6-DOF Robot Arm Commands ===");
+    Serial.print("FW version ");
+    Serial.print(FW_VERSION_STR);
+    Serial.print(" (");
+    Serial.print(FW_VERSION);
+    Serial.print("), HW version ");
+    Serial.println(HW_VERSION_STR);
     Serial.println("G0 X.. Y.. Z.. A.. B.. C.. J.. - Move (IK/Direct/Mixed, def A-90=tool+Y)");
     Serial.println("G1 X.. Y.. Z.. F..            - Cartesian straight line (TCP holds)");
     Serial.println("G28                           - Home all axes");
