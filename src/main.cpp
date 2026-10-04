@@ -70,9 +70,9 @@
  *   ┌─────────────────────────────────────┐  y=0
  *   │ TCP POS.                            │  заголовок
  *   ├─────────────────────────────────────┤  y=16
- *   │ X:   415mm      A:    90         │
- *   │ Y:     0mm      B:     0         │
- *   │ Z:   160mm      C:    90         │
+ *   │ X:   415mm   Roll:   90        │
+ *   │ Y:     0mm   Pitch:   0        │
+ *   │ Z:   160mm   Yaw:    90        │
  *   ├─────────────────────────────────────┤  y=72
  *   │ JOINTS                              │  заголовок
  *   ├─────────────────────────────────────┤  y=88
@@ -1907,17 +1907,19 @@ void displayUpdate() {
 
     tft.startWrite();
 
-    // === TCP Position Zone (3 строки × 2 колонки: слева XYZ, справа A/B/C) ===
+    // === TCP Position Zone (3 строки × 2 колонки: слева XYZ, справа Roll/Pitch/Yaw) ===
+    // Правая колонка ужата (метки x=92, значения x=168): полные слова
+    // Roll:/Pitch:/Yaw: иначе не влезают. Минус держит формат %4.0f.
     float qq[6];
     for (int i = 0; i < 6; i++) qq[i] = state.servoAngles[i];
     float ea, eb, ec;
     toolEulerZYX(qq, ea, eb, ec);
     drawField(4, 30, ZONE_TCP_Y + HEADER_H + 2,  "X:", state.tcpPosition.x, lastTCP[0], COLOR_TCP, "mm");
-    drawField(124, 160, ZONE_TCP_Y + HEADER_H + 2,  "A:", ea, lastTCP[3], COLOR_TCP, "");
+    drawField(92, 168, ZONE_TCP_Y + HEADER_H + 2,  "Roll:", ea, lastTCP[3], COLOR_TCP, "");
     drawField(4, 30, ZONE_TCP_Y + HEADER_H + 18, "Y:", state.tcpPosition.y, lastTCP[1], COLOR_TCP, "mm");
-    drawField(124, 160, ZONE_TCP_Y + HEADER_H + 18, "B:", eb, lastTCP[4], COLOR_TCP, "");
+    drawField(92, 168, ZONE_TCP_Y + HEADER_H + 18, "Pitch:", eb, lastTCP[4], COLOR_TCP, "");
     drawField(4, 30, ZONE_TCP_Y + HEADER_H + 34, "Z:", state.tcpPosition.z, lastTCP[2], COLOR_TCP, "mm");
-    drawField(124, 160, ZONE_TCP_Y + HEADER_H + 34, "C:", ec, lastTCP[5], COLOR_TCP, "");
+    drawField(92, 168, ZONE_TCP_Y + HEADER_H + 34, "Yaw:", ec, lastTCP[5], COLOR_TCP, "");
 
     // === Joints Zone (4 строки × 2 колонки, +2 px от заголовка) ===
     drawField(4,   40,  ZONE_JOINTS_Y + HEADER_H + 2,  "P1:", state.servoAngles[0], lastJoints[0], COLOR_JOINT, "");
