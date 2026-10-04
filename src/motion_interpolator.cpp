@@ -545,31 +545,6 @@ static float cartJointDist(const JointAngles &a, const JointAngles &b) {
     return m;
 }
 
-// Подтянуть эйлеры e к prev: варианты ±360 и flip-представление
-// (roll+180, 180-pitch, yaw+180) — та же матрица, гладкий трек без snap'ов.
-static void cartUnwrapEuler(const float prev[3], float e[3]) {
-    float best[3] = {e[0], e[1], e[2]};
-    float bestD = 1e30f;
-    for (int fr = -1; fr <= 1; fr++) {
-        for (int fy = -1; fy <= 1; fy++) {
-            float c0[3] = {e[0] + 360.0f * fr, e[1], e[2] + 360.0f * fy};
-            float d0 = fabs(c0[0]-prev[0]) + fabs(c0[1]-prev[1]) + fabs(c0[2]-prev[2]);
-            if (d0 < bestD) {
-                bestD = d0;
-                best[0] = c0[0]; best[1] = c0[1]; best[2] = c0[2];
-            }
-            float c1[3] = {e[0] + 180.0f + 360.0f * fr, 180.0f - e[1],
-                           e[2] + 180.0f + 360.0f * fy};
-            float d1 = fabs(c1[0]-prev[0]) + fabs(c1[1]-prev[1]) + fabs(c1[2]-prev[2]);
-            if (d1 < bestD) {
-                bestD = d1;
-                best[0] = c1[0]; best[1] = c1[1]; best[2] = c1[2];
-            }
-        }
-    }
-    e[0] = best[0]; e[1] = best[1]; e[2] = best[2];
-}
-
 /**
  * @brief Вывод готовых углов на сервы (люфт + callback).
  * Как executeStep(), но углы уже посчитаны (IK), интерполировать нечего.
@@ -714,10 +689,10 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
     float grip0 = currentAngles.angles[6];
     float grip1 = targetPose.gripper;
     JointAngles qPrev = currentAngles;
-    float ePrev[3];
-    { float er, ep, ey; cartRToEuler(R0, er, ep, ey); ePrev[0] = er; ePrev[1] = ep; ePrev[2] = ey; }
 
     // --- Цикл по декартовым шагам ---
+    // Ориентация идёт матрицей Rt сквозняком (slerp → refineSolutionM):
+    // без промежуточных эйлеров нет разрывов свёртки и snap'ов.
     for (int step = 0; step <= steps; step++) {
         if (!moving) break;
         uint32_t stepT0 = millis();
@@ -758,18 +733,23 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
                 R[i*3+j] = s;
             }
         }
-        float eu[3];
-        { float er, ep, ey; cartRToEuler(R, er, ep, ey); eu[0] = er; eu[1] = ep; eu[2] = ey; }
-        cartUnwrapEuler(ePrev, eu);
-        ePrev[0] = eu[0]; ePrev[1] = eu[1]; ePrev[2] = eu[2];
+        // Матрица цели шага напрямую в DLS (без эйлеров).
+        Mat4 Rt = Mat4::identity();
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) Rt.m[i][j] = R[i*3+j];
+        }
 
         Pose ps;
         ps.position = pp;
-        ps.orientation.x = eu[0]; ps.orientation.y = eu[1]; ps.orientation.z = eu[2];
+        // Эйлеры — только для fallback-геометрии solveAll (ей нужна Pose).
+        // Разовое преобразование, непрерывность не требуется: ближайший
+        // к qPrev всё равно выберется по joint-дистанции, не по эйлерам.
+        { float er, ep, ey; cartRToEuler(R, er, ep, ey);
+          ps.orientation.x = er; ps.orientation.y = ep; ps.orientation.z = ey; }
         ps.gripper = grip0 + (grip1 - grip0) * e;
 
         JointAngles qq = qPrev;
-        ikSolver->refineSolution(ps, qq, nullptr);
+        ikSolver->refineSolutionM(pp, Rt, qq, nullptr);
         if (cartJointDist(qq, qPrev) > CART_JUMP_DEG) {
             // Срыв трекинга: вторая попытка геометрией, ближайший к qPrev.
             JointAngles sols[4];

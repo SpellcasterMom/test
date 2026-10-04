@@ -70,9 +70,9 @@
  *   ┌─────────────────────────────────────┐  y=0
  *   │ TCP POS.                            │  заголовок
  *   ├─────────────────────────────────────┤  y=16
- *   │ X:   415mm                          │
- *   │ Y:     0mm                          │
- *   │ Z:   160mm                          │
+ *   │ X:   415mm    Roll:        90  │
+ *   │ Y:     0mm    Pitch:        0  │
+ *   │ Z:   160mm    Yaw:         90  │
  *   ├─────────────────────────────────────┤  y=72
  *   │ JOINTS                              │  заголовок
  *   ├─────────────────────────────────────┤  y=88
@@ -125,6 +125,7 @@
 #include "safety_checker.h"
 #include "gripper_controller.h"
 #include "jog_pendant.h"
+#include "detour_planner.h"
 #include "eeprom_storage.h"
 
 // Пины SPI для ST7789 заданы в классе LGFX ниже (VSPI).
@@ -164,6 +165,7 @@ SafetyChecker        safety;
 // открывает/закрывает «пальцы».
 GripperController    gripper;
 JogPendant           pendant;   // ручной пульт: штурвал + NEXT + E-STOP
+DetourPlanner        detour;    // объезд запретных зон: план вейпоинтов
 
 // Хранилище EEPROM: сохранение и загрузка конфигурации
 EEPROMStorage        storage;
@@ -287,6 +289,8 @@ struct DiagLastMove {
     DiagSol sols[4];
     int chosen = -1;        // индекс выбранного решения
     char failReason[64];    // причина отказа (пусто = отказа не было)
+    Vec3 detourPts[8];      // TCP вейпоинтов планировщика объезда
+    int detourCount = 0;    // сколько их (0 = прямо/нет плана)
     DiagLastMove() {
         memset(cmdText, 0, sizeof(cmdText));
         memset(kind, 0, sizeof(kind));
@@ -613,7 +617,36 @@ void handleG0(GCodeCommand &cmd) {
     // (после ребута — нули = недостижимый вылет 415мм) и даёт ложный
     // фолбэк на sequential с шага 0.
     interpolator.setCurrentAngles(currentAngles);
-    if (interpolator.moveTo(target, feedrate)) {
+    // Объезд препятствий: планировщик даёт цепочку joint-вейпоинтов
+    // (последний = target), едем каждый обычным moveTo. Сам интерполятор
+    // не тронут. DIRECT-режиму поза ни к чему — только RRT (nullptr).
+    float qs0[6];
+    for (int i = 0; i < 6; i++) qs0[i] = currentAngles.angles[i];
+    const Pose *pp = (cmd.mode == GCodeCommand::DIRECT_MODE) ? nullptr : &effPose;
+    JointAngles wps[8];
+    int nwp = detour.plan(qs0, target, pp, wps, 8);
+    // TCP вейпоинтов в журнал (видны в M115, даже если движение сорвётся).
+    diagLast.detourCount = 0;
+    for (int w = 0; w < nwp && w < 8; w++) {
+        float qw[6];
+        for (int i = 0; i < 6; i++) qw[i] = wps[w].angles[i];
+        diagLast.detourPts[diagLast.detourCount++] = fkSolver.getEndEffector(qw);
+    }
+    bool moved = false;
+    if (nwp <= 0) {
+        strncpy(diagLast.failReason, "No path: obstacle blocks all routes",
+                sizeof(diagLast.failReason) - 1);
+    } else {
+        moved = true;
+        for (int w = 0; w < nwp && moved; w++) {
+            if (!interpolator.moveTo(wps[w], feedrate)) moved = false;
+        }
+        if (!moved) {
+            strncpy(diagLast.failReason, "Move failed on detour leg",
+                    sizeof(diagLast.failReason) - 1);
+        }
+    }
+    if (moved) {
         xSemaphoreTake(angleMutex, portMAX_DELAY);
         currentAngles = target;
         xSemaphoreGive(angleMutex);
@@ -633,8 +666,12 @@ void handleG0(GCodeCommand &cmd) {
 
         Serial.println("OK");
     } else {
-        strncpy(diagLast.failReason, "Move failed (interpolator)",
-                sizeof(diagLast.failReason) - 1);
+        // Не затираем конкретную причину (nopath / detour leg),
+        // записанную выше.
+        if (diagLast.failReason[0] == '\0') {
+            strncpy(diagLast.failReason, "Move failed (interpolator)",
+                    sizeof(diagLast.failReason) - 1);
+        }
         xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
         sharedState.hasError = true;
         snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Move failed");
@@ -1073,6 +1110,16 @@ void handleM115(GCodeCommand &cmd) {
     } else {
         Serial.printf("FAIL: %s\n", diagLast.failReason);
     }
+    // Вейпоинты планировщика объезда (TCP-точки пути).
+    if (diagLast.detourCount > 0) {
+        Serial.printf("WPS: %d\n", diagLast.detourCount);
+        for (int i = 0; i < diagLast.detourCount; i++) {
+            Serial.printf("  [%d] X=%.1f Y=%.1f Z=%.1f\n", i,
+                          diagLast.detourPts[i].x,
+                          diagLast.detourPts[i].y,
+                          diagLast.detourPts[i].z);
+        }
+    }
     // Фактическое положение
     float q[6];
     for (int i = 0; i < 6; i++) q[i] = currentAngles.angles[i];
@@ -1324,6 +1371,15 @@ void handleM502(GCodeCommand &cmd) {
     ikSolver.setFingerLength(config.fingerLength);   // ← добавить
     fkSolver.setFingerLength(config.fingerLength);
     safety.setFingerLength(config.fingerLength);
+    // Заводские зоны (включая конструктив) — в рантайм safety.
+    safety.clearForbiddenZones();
+    for (int i = 0; i < config.forbiddenZoneCount && i < MAX_FORBIDDEN_ZONES; i++) {
+        const ForbiddenZone &z = config.forbiddenZones[i];
+        if (z.active) {
+            safety.addForbiddenZone(z.xMin, z.xMax, z.yMin, z.yMax, z.zMin, z.zMax,
+                                    z.skipLinks);
+        }
+    }
     Serial.println("OK: Factory defaults loaded");
 }
 
@@ -1332,6 +1388,12 @@ void handleM502(GCodeCommand &cmd) {
  */
 void handleHelp(GCodeCommand &cmd) {
     Serial.println("=== 6-DOF Robot Arm Commands ===");
+    Serial.print("FW version ");
+    Serial.print(FW_VERSION_STR);
+    Serial.print(" (");
+    Serial.print(FW_VERSION);
+    Serial.print("), HW version ");
+    Serial.println(HW_VERSION_STR);
     Serial.println("G0 X.. Y.. Z.. A.. B.. C.. J.. - Move (IK/Direct/Mixed, def A-90=tool+Y)");
     Serial.println("G1 X.. Y.. Z.. F..            - Cartesian straight line (TCP holds)");
     Serial.println("G28                           - Home all axes");
@@ -1519,6 +1581,10 @@ void setup() {
     interpolator.setIKSolver(&ikSolver);
     interpolator.setFKSolver(&fkSolver);
     interpolator.setStrategy(interpStrategy);
+    detour.setIKSolver(&ikSolver);
+    detour.setFKSolver(&fkSolver);
+    detour.setSafetyChecker(&safety);
+    detour.setServoController(&servoCtrl);
 
     gripper.setServoController(&servoCtrl);
     storage.begin();
@@ -1567,6 +1633,43 @@ void setup() {
         }
         Serial.printf("FW version %lu (%s) OK\n",
                       (unsigned long)FW_VERSION, FW_VERSION_STR);
+    }
+
+    // Запретные зоны: конфиг -> рантайм safety, плюс конструктив.
+    // Зоны живут только в рантайме: переносим сохранённые, затем проверяем
+    // конструктив колонны (DEFAULT_CONSTRUCT_ZONE): нет такой — добавляем
+    // и сохраняем в EEPROM (чтобы была сразу забита и переживала ребут).
+    safety.clearForbiddenZones();
+    for (int i = 0; i < config.forbiddenZoneCount && i < MAX_FORBIDDEN_ZONES; i++) {
+        const ForbiddenZone &z = config.forbiddenZones[i];
+        if (z.active) {
+            safety.addForbiddenZone(z.xMin, z.xMax, z.yMin, z.yMax, z.zMin, z.zMax,
+                                    z.skipLinks);
+        }
+    }
+    {
+        const ForbiddenZone &cz = DEFAULT_CONSTRUCT_ZONE;
+        bool hasConstruct = false;
+        for (int i = 0; i < safety.getZoneCount(); i++) {
+            float x1, x2, y1, y2, z1, z2;
+            bool act = false;
+            if (safety.getForbiddenZone(i, x1, x2, y1, y2, z1, z2, act) &&
+                fabs(x1 - cz.xMin) < 1.0f && fabs(x2 - cz.xMax) < 1.0f &&
+                fabs(y1 - cz.yMin) < 1.0f && fabs(y2 - cz.yMax) < 1.0f &&
+                fabs(z1 - cz.zMin) < 1.0f && fabs(z2 - cz.zMax) < 1.0f) {
+                hasConstruct = true;
+                break;
+            }
+        }
+        if (!hasConstruct) {
+            Serial.println("Construct zone missing: adding [-65,65]x[-65,65]x[0,180] + save");
+            safety.addForbiddenZone(cz.xMin, cz.xMax, cz.yMin, cz.yMax, cz.zMin, cz.zMax);
+            if (config.forbiddenZoneCount < MAX_FORBIDDEN_ZONES) {
+                config.forbiddenZones[config.forbiddenZoneCount] = cz;
+                config.forbiddenZoneCount++;
+                storage.saveConfig(config, homeAngles.angles, interpStrategy);
+            }
+        }
     }
 
     // Проверка сохранённого дома: битый home (напр. старые нули =
@@ -1709,12 +1812,58 @@ static void drawField(int xLabel, int xValue, int y,
     tft.setCursor(xLabel, y);
     tft.print(label);
 
-    // Число — фиксированное поле, знак "-" не сдвигает цифры
+    // Число — фиксированное поле, знак "-" не сдвигает цифры.
+    // Без хвостового пробела: он съедал зазор до правой колонки
+    // (все поля и так фиксированной ширины, чистить нечего).
     char buf[16];
-    snprintf(buf, sizeof(buf), "%4.0f%s ", value, unit);
+    snprintf(buf, sizeof(buf), "%4.0f%s", value, unit);
     tft.setTextColor(color, TFT_BLACK);
     tft.setCursor(xValue, y);
     tft.print(buf);
+}
+
+/**
+ * drawFieldR() — как drawField, но число прижато ВПРАВО к xRight.
+ * Формат "%4.0f" всегда даёт ровно 4 символа (наши диапазоны ±180/0-100),
+ * поэтому курсор = xRight - 48, хвостов не остаётся.
+ */
+static void drawFieldR(int xLabel, int xRight, int y,
+                       const char *label, float value, float &lastVal,
+                       uint16_t color) {
+    if (fabs(value - lastVal) < 0.5f) return;
+    lastVal = value;
+
+    tft.setTextSize(2);
+
+    tft.setTextColor(COLOR_FIELD_LABEL, TFT_BLACK);
+    tft.setCursor(xLabel, y);
+    tft.print(label);
+
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%4.0f", value);
+    tft.setTextColor(color, TFT_BLACK);
+    tft.setCursor(xRight - 48, y);
+    tft.print(buf);
+}
+
+/**
+ * toolEulerZYX() — ориентация инструмента (R06) в эйлеры ZYX, градусы.
+ * Та же конвенция, что G-code A/B/C (R = Rz·Ry·Rx).
+ */
+static void toolEulerZYX(const float q[6], float &a, float &b, float &c) {
+    Mat4 R = fkSolver.getRotationMatrix(q, 5);
+    float sp = -R.m[2][0];
+    if (sp > 0.9999f) {
+        b = 90.0f; a = 0.0f;
+        c = atan2(-R.m[0][1], R.m[0][2]) * 180.0f / 3.14159265f;
+    } else if (sp < -0.9999f) {
+        b = -90.0f; a = 0.0f;
+        c = atan2(-R.m[0][1], -R.m[0][2]) * 180.0f / 3.14159265f;
+    } else {
+        b = asin(sp) * 180.0f / 3.14159265f;
+        a = atan2(R.m[2][1], R.m[2][2]) * 180.0f / 3.14159265f;
+        c = atan2(R.m[1][0], R.m[0][0]) * 180.0f / 3.14159265f;
+    }
 }
 
 // ====================================================================
@@ -1784,20 +1933,30 @@ void displayUpdate() {
 
     tft.startWrite();
 
-    // === TCP Position Zone (3 строки, +2 px от заголовка) ===
+    // === TCP Position Zone (3 строки × 2 колонки: слева XYZ, справа Roll/Pitch/Yaw) ===
+    // Раскладка по пикселям (шрифт 12px/знак): левые значения до x=114
+    // ("-500mm"), метки с x=116 ("Pitch:" до 188), значения 188..236.
+    // Правая колонка ужата, иначе не влезает в 240.
+    float qq[6];
+    for (int i = 0; i < 6; i++) qq[i] = state.servoAngles[i];
+    float ea, eb, ec;
+    toolEulerZYX(qq, ea, eb, ec);
     drawField(4, 30, ZONE_TCP_Y + HEADER_H + 2,  "X:", state.tcpPosition.x, lastTCP[0], COLOR_TCP, "mm");
+    drawFieldR(116, 236, ZONE_TCP_Y + HEADER_H + 2,  "Roll:", ea, lastTCP[3], COLOR_TCP);
     drawField(4, 30, ZONE_TCP_Y + HEADER_H + 18, "Y:", state.tcpPosition.y, lastTCP[1], COLOR_TCP, "mm");
+    drawFieldR(116, 236, ZONE_TCP_Y + HEADER_H + 18, "Pitch:", eb, lastTCP[4], COLOR_TCP);
     drawField(4, 30, ZONE_TCP_Y + HEADER_H + 34, "Z:", state.tcpPosition.z, lastTCP[2], COLOR_TCP, "mm");
+    drawFieldR(116, 236, ZONE_TCP_Y + HEADER_H + 34, "Yaw:", ec, lastTCP[5], COLOR_TCP);
 
     // === Joints Zone (4 строки × 2 колонки, +2 px от заголовка) ===
     drawField(4,   40,  ZONE_JOINTS_Y + HEADER_H + 2,  "P1:", state.servoAngles[0], lastJoints[0], COLOR_JOINT, "");
-    drawField(124, 160, ZONE_JOINTS_Y + HEADER_H + 2,  "P4:", state.servoAngles[3], lastJoints[3], COLOR_JOINT, "");
+    drawFieldR(124, 232, ZONE_JOINTS_Y + HEADER_H + 2,  "P4:", state.servoAngles[3], lastJoints[3], COLOR_JOINT);
 
     drawField(4,   40,  ZONE_JOINTS_Y + HEADER_H + 18, "P2:", state.servoAngles[1], lastJoints[1], COLOR_JOINT, "");
-    drawField(124, 160, ZONE_JOINTS_Y + HEADER_H + 18, "P5:", state.servoAngles[4], lastJoints[4], COLOR_JOINT, "");
+    drawFieldR(124, 232, ZONE_JOINTS_Y + HEADER_H + 18, "P5:", state.servoAngles[4], lastJoints[4], COLOR_JOINT);
 
     drawField(4,   40,  ZONE_JOINTS_Y + HEADER_H + 34, "P3:", state.servoAngles[2], lastJoints[2], COLOR_JOINT, "");
-    drawField(124, 160, ZONE_JOINTS_Y + HEADER_H + 34, "P6:", state.servoAngles[5], lastJoints[5], COLOR_JOINT, "");
+    drawFieldR(124, 232, ZONE_JOINTS_Y + HEADER_H + 34, "P6:", state.servoAngles[5], lastJoints[5], COLOR_JOINT);
 
     drawField(4, 100, ZONE_JOINTS_Y + HEADER_H + 50, "Gripper:", state.gripperPercent, lastGrip, COLOR_GRIPPER, "%");
 

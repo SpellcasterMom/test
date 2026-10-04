@@ -82,7 +82,8 @@ public:
      * @param y1, y2 Границы по Y
      * @param z1, z2 Границы по Z
      */
-    void addForbiddenZone(float x1, float x2, float y1, float y2, float z1, float z2);
+    void addForbiddenZone(float x1, float x2, float y1, float y2, float z1, float z2,
+                          uint8_t skipMask = 0);
 
     /**
      * @brief Очистка всех запрещенных зон.
@@ -182,7 +183,7 @@ private:
      * @param p Точка в декартовых координатах
      * @return true если точка находится в какой-либо запрещенной зоне
      */
-    bool insideForbiddenZone(const Vec3 &p) const;
+    bool insideForbiddenZone(const Vec3 &p, int linkIdx = -1) const;
 
     /**
      * @brief Проверка безопасности отдельного звена.
