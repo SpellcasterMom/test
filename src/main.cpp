@@ -1376,7 +1376,8 @@ void handleM502(GCodeCommand &cmd) {
     for (int i = 0; i < config.forbiddenZoneCount && i < MAX_FORBIDDEN_ZONES; i++) {
         const ForbiddenZone &z = config.forbiddenZones[i];
         if (z.active) {
-            safety.addForbiddenZone(z.xMin, z.xMax, z.yMin, z.yMax, z.zMin, z.zMax);
+            safety.addForbiddenZone(z.xMin, z.xMax, z.yMin, z.yMax, z.zMin, z.zMax,
+                                    z.skipLinks);
         }
     }
     Serial.println("OK: Factory defaults loaded");
@@ -1636,7 +1637,8 @@ void setup() {
     for (int i = 0; i < config.forbiddenZoneCount && i < MAX_FORBIDDEN_ZONES; i++) {
         const ForbiddenZone &z = config.forbiddenZones[i];
         if (z.active) {
-            safety.addForbiddenZone(z.xMin, z.xMax, z.yMin, z.yMax, z.zMin, z.zMax);
+            safety.addForbiddenZone(z.xMin, z.xMax, z.yMin, z.yMax, z.zMin, z.zMax,
+                                    z.skipLinks);
         }
     }
     {

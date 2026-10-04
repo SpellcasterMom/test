@@ -93,14 +93,14 @@ void SafetyChecker::setDHParams(const float dh[6][4]) {
  * Максимальное количество зон: MAX_FORBIDDEN_ZONES.
  */
 void SafetyChecker::addForbiddenZone(float x1, float x2, float y1, float y2,
-                                      float z1, float z2) {
+                                      float z1, float z2, uint8_t skipMask) {
     if (zoneCount >= MAX_FORBIDDEN_ZONES) return;
     zones[zoneCount] = {
         .xMin = fmin(x1, x2), .xMax = fmax(x1, x2),
         .yMin = fmin(y1, y2), .yMax = fmax(y1, y2),
         .zMin = fmin(z1, z2), .zMax = fmax(z1, z2),
         .active = true,
-        .skipLinks = 0,   // ручные зоны проверяют все звенья
+        .skipLinks = skipMask,   // M410: 0 (все звенья); конструктив несёт свою
     };
     zoneCount++;
 }
