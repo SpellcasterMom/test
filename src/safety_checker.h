@@ -182,7 +182,7 @@ private:
      * @param p Точка в декартовых координатах
      * @return true если точка находится в какой-либо запрещенной зоне
      */
-    bool insideForbiddenZone(const Vec3 &p) const;
+    bool insideForbiddenZone(const Vec3 &p, int linkIdx = -1) const;
 
     /**
      * @brief Проверка безопасности отдельного звена.

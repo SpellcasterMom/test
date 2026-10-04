@@ -100,6 +100,7 @@ void SafetyChecker::addForbiddenZone(float x1, float x2, float y1, float y2,
         .yMin = fmin(y1, y2), .yMax = fmax(y1, y2),
         .zMin = fmin(z1, z2), .zMax = fmax(z1, z2),
         .active = true,
+        .skipLinks = 0,   // ручные зоны проверяют все звенья
     };
     zoneCount++;
 }
@@ -160,11 +161,13 @@ bool SafetyChecker::insideWorkspace(const Vec3 &p) const {
  * @brief Проверка попадания точки в запрещенную зону.
  * Перебирает все активные запрещенные зоны. Если точка попадает
  * внутрь хотя бы одной зоны (все 6 координат в пределах), возвращает true.
- * Неактивные зоны пропускаются.
+ * Неактивные зоны пропускаются. Звено linkIdx>=0 пропускает зоны,
+ * в чьей маске skipLinks стоит его бит (статика/конструктив).
  */
-bool SafetyChecker::insideForbiddenZone(const Vec3 &p) const {
+bool SafetyChecker::insideForbiddenZone(const Vec3 &p, int linkIdx) const {
     for (int i = 0; i < zoneCount; i++) {
         if (!zones[i].active) continue;
+        if (linkIdx >= 0 && (zones[i].skipLinks & (1 << linkIdx))) continue;
         if (p.x >= zones[i].xMin && p.x <= zones[i].xMax &&
             p.y >= zones[i].yMin && p.y <= zones[i].yMax &&
             p.z >= zones[i].zMin && p.z <= zones[i].zMax) {
@@ -247,8 +250,9 @@ bool SafetyChecker::checkLinkSafety(const Vec3 &jointA, const Vec3 &jointB, int 
             return false;
         }
 
-        // Проверка 4: запрещенные зоны
-        if (insideForbiddenZone(point)) {
+        // Проверка 4: запрещенные зоны (с маской звена: статика/конструктив
+        // внутри по построению — их столкновение не считаем).
+        if (insideForbiddenZone(point, linkIdx)) {
             lastError = "Link " + String(linkIdx) +
                         " in forbidden zone at (" + String(point.x, 1) + ", " +
                         String(point.y, 1) + ", " + String(point.z, 1) + ")";
@@ -310,8 +314,10 @@ bool SafetyChecker::checkAllLinks(const float q[6]) {
     Vec3 joints[7];
     fkSolver.getAllJointPositions(q, joints);
 
-    // Проверка радиуса дотягивания для каждого сочленения (1-6)
-    // Соединение 0 (основание) находится на оси, его не проверяем
+    // Проверка каждого звена, КРОМЕ нулевого (J0→J1 — статическая колонна:
+    // оба конца зафиксированы всегда, считать её столкновение со столом
+    // бессмысленно; заодно ~1/7 времени safety и никаких ложных FAIL'ов базы).
+    // Проверка радиуса для сочленений (1-6) ниже — без изменений.
     for (int i = 1; i <= 6; i++) {
         float reachXY = sqrt(joints[i].x * joints[i].x + joints[i].y * joints[i].y);
         if (reachXY > linkSafety.maxReach) {
@@ -326,9 +332,10 @@ bool SafetyChecker::checkAllLinks(const float q[6]) {
         }
     }
 
-    // Проверка каждого из 6 основных звеньев (от сочленения i до i+1)
+    // Проверка звеньев 1..6 (нулевое J0→J1 — статическая колонна базы:
+    // оба конца зафиксированы, столкновение считать бессмысленно).
     // Каждое звено проверяется по 5 точкам на Z минимум, границы, радиус и запрещенные зоны
-    for (int i = 0; i < 6; i++) {
+    for (int i = 1; i < 6; i++) {
         if (!checkLinkSafety(joints[i], joints[i + 1], i)) {
             return false;
         }
