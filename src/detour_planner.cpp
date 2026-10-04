@@ -151,7 +151,7 @@ int DetourPlanner::plan(const float qstart[6], const JointAngles &target,
     // --- Фаза 2: RRT в joint-space (старты: via..., затем current) ---
     // Быстрый путь: прямая старт->цель свободна — сразу она (как twin,
     // без RRT-танцев). Это 95% движений.
-    if (safety->checkTrajectory(qs, qg, 20)) {
+    if (safety->checkTrajectory(qstart, qg, 20)) {
         wps[0] = target;
         return 1;
     }
