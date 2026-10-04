@@ -125,6 +125,7 @@
 #include "safety_checker.h"
 #include "gripper_controller.h"
 #include "jog_pendant.h"
+#include "detour_planner.h"
 #include "eeprom_storage.h"
 
 // Пины SPI для ST7789 заданы в классе LGFX ниже (VSPI).
@@ -164,6 +165,7 @@ SafetyChecker        safety;
 // открывает/закрывает «пальцы».
 GripperController    gripper;
 JogPendant           pendant;   // ручной пульт: штурвал + NEXT + E-STOP
+DetourPlanner        detour;    // объезд запретных зон: план вейпоинтов
 
 // Хранилище EEPROM: сохранение и загрузка конфигурации
 EEPROMStorage        storage;
@@ -613,7 +615,29 @@ void handleG0(GCodeCommand &cmd) {
     // (после ребута — нули = недостижимый вылет 415мм) и даёт ложный
     // фолбэк на sequential с шага 0.
     interpolator.setCurrentAngles(currentAngles);
-    if (interpolator.moveTo(target, feedrate)) {
+    // Объезд препятствий: планировщик даёт цепочку joint-вейпоинтов
+    // (последний = target), едем каждый обычным moveTo. Сам интерполятор
+    // не тронут. DIRECT-режиму поза ни к чему — только RRT (nullptr).
+    float qs0[6];
+    for (int i = 0; i < 6; i++) qs0[i] = currentAngles.angles[i];
+    const Pose *pp = (cmd.mode == GCodeCommand::DIRECT_MODE) ? nullptr : &effPose;
+    JointAngles wps[8];
+    int nwp = detour.plan(qs0, target, pp, wps, 8);
+    bool moved = false;
+    if (nwp <= 0) {
+        strncpy(diagLast.failReason, "No path: obstacle blocks all routes",
+                sizeof(diagLast.failReason) - 1);
+    } else {
+        moved = true;
+        for (int w = 0; w < nwp && moved; w++) {
+            if (!interpolator.moveTo(wps[w], feedrate)) moved = false;
+        }
+        if (!moved) {
+            strncpy(diagLast.failReason, "Move failed on detour leg",
+                    sizeof(diagLast.failReason) - 1);
+        }
+    }
+    if (moved) {
         xSemaphoreTake(angleMutex, portMAX_DELAY);
         currentAngles = target;
         xSemaphoreGive(angleMutex);
@@ -633,8 +657,12 @@ void handleG0(GCodeCommand &cmd) {
 
         Serial.println("OK");
     } else {
-        strncpy(diagLast.failReason, "Move failed (interpolator)",
-                sizeof(diagLast.failReason) - 1);
+        // Не затираем конкретную причину (nopath / detour leg),
+        // записанную выше.
+        if (diagLast.failReason[0] == '\0') {
+            strncpy(diagLast.failReason, "Move failed (interpolator)",
+                    sizeof(diagLast.failReason) - 1);
+        }
         xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
         sharedState.hasError = true;
         snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Move failed");
@@ -1527,6 +1555,10 @@ void setup() {
     interpolator.setIKSolver(&ikSolver);
     interpolator.setFKSolver(&fkSolver);
     interpolator.setStrategy(interpStrategy);
+    detour.setIKSolver(&ikSolver);
+    detour.setFKSolver(&fkSolver);
+    detour.setSafetyChecker(&safety);
+    detour.setServoController(&servoCtrl);
 
     gripper.setServoController(&servoCtrl);
     storage.begin();
