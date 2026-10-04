@@ -289,6 +289,8 @@ struct DiagLastMove {
     DiagSol sols[4];
     int chosen = -1;        // индекс выбранного решения
     char failReason[64];    // причина отказа (пусто = отказа не было)
+    Vec3 detourPts[8];      // TCP вейпоинтов планировщика объезда
+    int detourCount = 0;    // сколько их (0 = прямо/нет плана)
     DiagLastMove() {
         memset(cmdText, 0, sizeof(cmdText));
         memset(kind, 0, sizeof(kind));
@@ -623,6 +625,13 @@ void handleG0(GCodeCommand &cmd) {
     const Pose *pp = (cmd.mode == GCodeCommand::DIRECT_MODE) ? nullptr : &effPose;
     JointAngles wps[8];
     int nwp = detour.plan(qs0, target, pp, wps, 8);
+    // TCP вейпоинтов в журнал (видны в M115, даже если движение сорвётся).
+    diagLast.detourCount = 0;
+    for (int w = 0; w < nwp && w < 8; w++) {
+        float qw[6];
+        for (int i = 0; i < 6; i++) qw[i] = wps[w].angles[i];
+        diagLast.detourPts[diagLast.detourCount++] = fkSolver.getEndEffector(qw);
+    }
     bool moved = false;
     if (nwp <= 0) {
         strncpy(diagLast.failReason, "No path: obstacle blocks all routes",
@@ -1100,6 +1109,16 @@ void handleM115(GCodeCommand &cmd) {
         Serial.printf("CHOSEN: [%d] (%s)\n", diagLast.chosen, how);
     } else {
         Serial.printf("FAIL: %s\n", diagLast.failReason);
+    }
+    // Вейпоинты планировщика объезда (TCP-точки пути).
+    if (diagLast.detourCount > 0) {
+        Serial.printf("WPS: %d\n", diagLast.detourCount);
+        for (int i = 0; i < diagLast.detourCount; i++) {
+            Serial.printf("  [%d] X=%.1f Y=%.1f Z=%.1f\n", i,
+                          diagLast.detourPts[i].x,
+                          diagLast.detourPts[i].y,
+                          diagLast.detourPts[i].z);
+        }
     }
     // Фактическое положение
     float q[6];
