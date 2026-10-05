@@ -155,7 +155,11 @@ void ImuLogger::recoverBus() {
     Wire.setTimeout(20);
     reinitChips();
     busFails_ = 0;
-    Serial.println("IMU: bus recovered");
+    recovers_++;
+    // Печатаем первые разы и дальше каждую 40-ю (иначе спам при дохлой шине).
+    if (recovers_ <= 3 || (recovers_ % 40) == 0) {
+        Serial.printf("IMU: bus recovered #%lu\n", (unsigned long)recovers_);
+    }
 }
 
 void ImuLogger::poll() {
@@ -238,10 +242,16 @@ void ImuLogger::poll() {
 
 void ImuLogger::taskTrampoline(void *arg) {
     ImuLogger *self = (ImuLogger *)arg;
-    TickType_t last = xTaskGetTickCount();
     for (;;) {
         self->poll();
-        vTaskDelayUntil(&last, pdMS_TO_TICKS(IMU_PERIOD_MS));
+        // Дохлая шина: опрашивать на 200 Гц бессмысленно (одни таймауты) —
+        // откатываемся на 10 Гц, чтобы не жечь время и не спамить.
+        // Метки времени всё равно ставятся на каждый сэмпл, джиттер не важен.
+        if (self->busFails_ > 100) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(IMU_PERIOD_MS));
+        }
     }
 }
 

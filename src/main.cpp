@@ -1040,6 +1040,9 @@ void handleM119(GCodeCommand &cmd) {
         Serial.printf("IMU: peak acc=%.2fg jerk=%.1fg/s log n=%lu rec=%d\n",
                       pkA, pkJ, (unsigned long)imuLogger.sampleCount(),
                       imuLogger.isRecording() ? 1 : 0);
+        Serial.printf("IMU: bus fails=%lu recovers=%lu\n",
+                      (unsigned long)imuLogger.busFails(),
+                      (unsigned long)imuLogger.busRecovers());
         Serial.println("OK");
         return;
     }

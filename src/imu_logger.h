@@ -79,6 +79,8 @@ public:
     bool isRecording() const;
     void setHold(bool h);  // заморозить запись на время DUMP (рвёт tearing)
     void dump(uint8_t decim);  // печать кольца в Serial, старое → новое
+    uint32_t busFails() const { return busFails_; }
+    uint32_t busRecovers() const { return recovers_; }
 
 private:
     static void taskTrampoline(void *arg);
@@ -106,6 +108,7 @@ private:
 
     MotionInterpolator *interp_ = nullptr;
     uint32_t busFails_ = 0;   // подряд идущие битые транзакции
+    uint32_t recovers_ = 0;   // сколько раз поднимали шину
     static ImuSample ring_[IMU_LOG_N];
     volatile uint32_t head_ = 0;    // куда пишем следующим
     volatile uint32_t count_ = 0;   // сколько валидных (<= N)
