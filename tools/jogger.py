@@ -39,6 +39,17 @@ BAUD = 115200
 STEP_SMALL = 5.0
 STEP_BIG = 25.0
 
+# Лимиты math-углов (зеркало DEFAULT_SERVO_CONFIG из src/config.h):
+# P1-P3 ±135, P4-P6 ±90, P7 0..100. Джог дальше лимита не шлёт —
+# иначе локальный угол убегает от реального (прошивка режет молча).
+SERVO_LIMITS = [(-135.0, 135.0)] * 3 + [(-90.0, 90.0)] * 3 + [(0.0, 100.0)]
+
+
+def clamp_angle(idx, value):
+    lo, hi = SERVO_LIMITS[idx]
+    limited = value < lo or value > hi
+    return max(lo, min(hi, value)), limited
+
 # (плюс-клавиша, минус-клавиша) -> индекс сервы 0..6 (P1..P7)
 KEYS = {
     'q': (0, +1), 'a': (0, -1),
@@ -221,9 +232,10 @@ def main():
             if low in KEYS and ch.isalpha():
                 idx, direction = KEYS[low]
                 step = STEP_BIG if ch.isupper() else STEP_SMALL
-                target = angles[idx] + direction * step
+                target, limited = clamp_angle(idx, angles[idx] + direction * step)
+                lim_mark = " [ЛИМИТ!]" if limited else ""
                 cmd = f"M104 P{idx+1}={target:.1f}"
-                print(f">> {cmd}   (P{idx+1}: {angles[idx]:.1f} -> {target:.1f})", flush=True)
+                print(f">> {cmd}   (P{idx+1}: {angles[idx]:.1f} -> {target:.1f}){lim_mark}", flush=True)
                 res, rlines = send(ser, cmd, 30)
                 err = next((l for l in rlines if l.upper().startswith("ERROR")), None)
                 if err:
