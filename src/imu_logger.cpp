@@ -43,6 +43,15 @@ static void imuGive() {
     if (i2cMutex) xSemaphoreGive(i2cMutex);
 }
 
+// Один регистр напрямую, без либ (у либ внутри местами повторный
+// Wire.begin(), который вешает шину — см. begin()).
+static void imuWriteReg(uint8_t addr, uint8_t reg, uint8_t val) {
+    Wire.beginTransmission(addr);
+    Wire.write(reg);
+    Wire.write(val);
+    Wire.endTransmission();
+}
+
 void ImuLogger::begin(uint8_t mask) {
     // Wire уже поднят (servoCtrl.init). Вызывать из setup, задач ещё нет —
     // мьютекс не нужен, но take/give с NULL-хендлом безопасны и здесь.
@@ -61,10 +70,15 @@ void ImuLogger::begin(uint8_t mask) {
     }
     if (mask & 0x02) {
         ADXL345 *a = new ADXL345();  // I2C, адрес 0x53 зашит в либе
-        a->powerOn();                // Wire.begin() внутри — пины дефолтные 21/22, наши же
-        a->setRangeSetting(16);
-        a->setFullResBit(true);      // иначе 10-бит и 31 мг/LSB!
-        a->set_bw(ADXL345_BW_200);    // ODR 200 Гц под наш опрос
+        // ВНИМАНИЕ: a->powerOn() НЕ зовём — внутри повторный Wire.begin(),
+        // который вешает уже поднятую шину (вис на загрузке после gyro OK).
+        // Инит регистрами напрямую (то же, что powerOn+настройки):
+        imuWriteReg(0x53, ADXL345_POWER_CTL, 0);  // wakeup
+        imuWriteReg(0x53, ADXL345_POWER_CTL, 16);  // auto-sleep
+        imuWriteReg(0x53, ADXL345_POWER_CTL, 8);  // measure
+        // DATA_FORMAT: FULL_RES(0x08) | range 16g(0x03) => 3.902 мг/LSB
+        imuWriteReg(0x53, ADXL345_DATA_FORMAT, 0x0B);
+        imuWriteReg(0x53, ADXL345_BW_RATE, ADXL345_BW_200);  // ODR 200 Гц
         acc_ = a;
         hasAcc_ = true;
         Serial.println("IMU: acc ADXL345 OK (16g, full-res, 200Hz)");
