@@ -234,7 +234,7 @@ struct SharedState {
     bool        isMoving;         // Флаг движения
     bool        safetyEnabled;    // Состояние безопасности
     bool        pcaReady;         // PCA9685 найден на I2C
-    bool        imuReady;         // GY-80 найден на I2C (все 4 чипа)
+    bool        imuReady;         // GY-80: гиро+аксель на I2C (рабочий минимум)
     bool        hasError;         // Есть ошибка
     char        lastError[64];    // Текст последней ошибки
     char        lastCommand[24];  // Последняя полученная команда
@@ -1604,10 +1604,12 @@ void core1Task(void *pvParameters) {
 // setup() — инициализация
 // ====================================================================
 // GY-80 на общей I2C (SDA=21/SCL=22, Wire уже поднят servoCtrl.init()).
-// Возвращает число найденных чипов (0-4): гиро L3G4200D (0x68/0x69 —
-// зависит от запайки SDO), аксель ADXL345 (0x53), магнит HMC5883L (0x1E),
-// баро BMP180 (0x77).
-static int gy80Found = 0;
+// Возвращает битовую маску найденных чипов: бит0=гиро L3G4200D (0x68/0x69 —
+// зависит от запайки SDO), бит1=аксель ADXL345 (0x53),
+// бит2=магнит HMC5883L (0x1E), бит3=баро BMP180 (0x77).
+// Рабочий минимум для наклона и guard'а — гиро+аксель (маска 0x03);
+// магнит нужен только для 9-DOF yaw, баро руке не нужно вовсе.
+static int gy80Mask = 0;
 
 static bool i2cPing(uint8_t addr) {
     Wire.beginTransmission(addr);
@@ -1615,12 +1617,12 @@ static bool i2cPing(uint8_t addr) {
 }
 
 static int scanGY80() {
-    int found = 0;
-    if (i2cPing(0x68) || i2cPing(0x69)) found++;  // гиро
-    if (i2cPing(0x53)) found++;                    // аксель
-    if (i2cPing(0x1E)) found++;                    // магнит
-    if (i2cPing(0x77)) found++;                    // баро
-    return found;
+    int mask = 0;
+    if (i2cPing(0x68) || i2cPing(0x69)) mask |= 0x01;  // гиро
+    if (i2cPing(0x53)) mask |= 0x02;                   // аксель
+    if (i2cPing(0x1E)) mask |= 0x04;                   // магнит
+    if (i2cPing(0x77)) mask |= 0x08;                   // баро
+    return mask;
 }
 
 void setup() {
@@ -1652,12 +1654,17 @@ void setup() {
         Serial.println("PCA9685: NOT FOUND (debug mode)");
     }
 
-    // Поиск GY-80 (железо воткнуто или нет — драйвер позже, см. TODO)
-    gy80Found = scanGY80();
+    // Поиск GY-80 (железо воткнуто или нет — драйвер позже, см. TODO).
+    // Зелёный кружок = гиро+аксель есть (можно работать); детали — в Serial.
+    gy80Mask = scanGY80();
     xSemaphoreTake(displayMutex, portMAX_DELAY);
-    sharedState.imuReady = (gy80Found == 4);
+    sharedState.imuReady = ((gy80Mask & 0x03) == 0x03);
     xSemaphoreGive(displayMutex);
-    Serial.printf("GY-80: FOUND %d/4 (gyro/acc/mag/baro)\n", gy80Found);
+    Serial.printf("GY-80: gyro=%c acc=%c mag=%c baro=%c\n",
+                  (gy80Mask & 0x01) ? '+' : '-',
+                  (gy80Mask & 0x02) ? '+' : '-',
+                  (gy80Mask & 0x04) ? '+' : '-',
+                  (gy80Mask & 0x08) ? '+' : '-');
 
     // Связывание интерполятора с зависимостями
     interpolator.setServoController(&servoCtrl);
@@ -1795,7 +1802,7 @@ void setup() {
     memset(&sharedState, 0, sizeof(sharedState));
     sharedState.safetyEnabled = safety.isEnabled();
     sharedState.pcaReady = servoCtrl.isPcaAvailable();
-    sharedState.imuReady = (gy80Found == 4);
+    sharedState.imuReady = ((gy80Mask & 0x03) == 0x03);
     sharedState.tcpPosition = fkSolver.getEndEffector(homeAngles.angles);
     for (int i = 0; i < 7; i++) {
         sharedState.servoAngles[i] = homeAngles.angles[i];
