@@ -1,6 +1,8 @@
 # CAD — 3D-модели (STEP)
 
 Каталог для 3D-моделей манипулятора в формате STEP (.step / .stp).
+За старт взят проект https://www.printables.com/model/971320-6dof-robot-arm-modular-cheap-educational
+Доработано, основание, корзины, штанги, валы
 
 Происхождение геометрии: чертёж [`docs/robot1.jpg`](../docs/robot1.jpg).
 
