@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """
+Project     : 6DOF arm (CLAW)
+Author      : Vladimir V. Laykov aka Yago
+Alma Mater  : Sevastopol State University
+Date        : 2026-10-05
+Last modify : 2026-10-05
+
 Джоггер 6-DOF руки с клавиатуры.
 
 Пары клавиш на серву (+/-):  q/a=P1  w/s=P2  e/d=P3  r/f=P4
@@ -127,6 +133,20 @@ class Keyboard:
             import termios
             termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
 
+    def drain(self):
+        """Выбросить всё, что нажали пока ждали ответ (иначе команды копятся и рвут вывод)."""
+        if self.win:
+            import msvcrt
+            while msvcrt.kbhit():
+                msvcrt.getch()
+            return
+        import select
+        while True:
+            r, _, _ = select.select([sys.stdin], [], [], 0)
+            if not r:
+                break
+            sys.stdin.read(1)
+
 
 def main():
     if len(sys.argv) < 2:
@@ -165,14 +185,16 @@ def main():
                 print(HELP)
                 continue
             if ch == '~' or ch == '`':
-                print(">> M105")
+                print(">> M105", flush=True)
                 _, rlines = send(ser, "M105", 8)
                 for l in rlines:
-                    print("  <", l)
+                    print("  <", l, flush=True)
                 got = parse_angles(next((l for l in rlines if l.startswith("Angles:")), ""))
                 if not all(a is None for a in got):
                     angles = [a if a is not None else angles[i] for i, a in enumerate(got)]
-                    print("Текущие:", " ".join(f"P{i+1}={a:.1f}" for i, a in enumerate(angles)))
+                    print("Текущие:", " ".join(f"P{i+1}={a:.1f}" for i, a in enumerate(angles)), flush=True)
+                print(flush=True)
+                kb.drain()
                 continue
             low = ch.lower()
             if low in KEYS and ch.isalpha():
@@ -184,10 +206,12 @@ def main():
                 res, rlines = send(ser, cmd, 30)
                 err = next((l for l in rlines if l.upper().startswith("ERROR")), None)
                 if err:
-                    print(f"  < {err} — угол НЕ обновлён")
+                    print(f"  < {err} — угол НЕ обновлён", flush=True)
                 else:
                     angles[idx] = target
-                    print(f"  < {res}")
+                    print(f"  < {res}", flush=True)
+                print(flush=True)
+                kb.drain()
     finally:
         kb.restore()
 
