@@ -70,7 +70,7 @@
  * =====================================================================
  *
  *   ┌─────────────────────────────────────┐  y=0
- *   │ TCP POS.                            │  заголовок
+ *   │ TCP POS.              FW: 6(1.5)     │  заголовок + версия справа
  *   ├─────────────────────────────────────┤  y=16
  *   │ X:   415mm    Roll:        90  │
  *   │ Y:     0mm    Pitch:        0  │
@@ -82,10 +82,9 @@
  *   │ P2:  -40     P5:    0               │
  *   │ P3:    0     P6:    0               │
  *   │ Gripper:   50%                      │
- *   │ FW version 1 (1.0)                   │
  *   ├─────────────────────────────────────┤  y=176
  *   │ READY           ABS            123  │  статус + режим + счётчик
- *   │ Safe:ON     PCA:●     GYR:●          │  режимы текстом, железо кружками
+ *   │ Safe:ON     PCA:●     GYR:●          │  режимы текстом; кружки: PCA зел/красн, GYR зел=гиро+аксель, жёлт=только гиро, красн=нет гиро
  *   │ G28                                 │  последняя команда
  *   └─────────────────────────────────────┘  y=240
  *
@@ -235,7 +234,7 @@ struct SharedState {
     bool        isMoving;         // Флаг движения
     bool        safetyEnabled;    // Состояние безопасности
     bool        pcaReady;         // PCA9685 найден на I2C
-    bool        imuReady;         // GY-80 найден на I2C (все 4 чипа)
+    uint8_t     imuState;         // GYR: 0=нет гиро (красный), 1=гиро без акселя (жёлтый), 2=гиро+аксель (зелёный)
     bool        hasError;         // Есть ошибка
     char        lastError[64];    // Текст последней ошибки
     char        lastCommand[24];  // Последняя полученная команда
@@ -1605,23 +1604,33 @@ void core1Task(void *pvParameters) {
 // setup() — инициализация
 // ====================================================================
 // GY-80 на общей I2C (SDA=21/SCL=22, Wire уже поднят servoCtrl.init()).
-// Возвращает число найденных чипов (0-4): гиро L3G4200D (0x68/0x69 —
-// зависит от запайки SDO), аксель ADXL345 (0x53), магнит HMC5883L (0x1E),
-// баро BMP180 (0x77).
-static int gy80Found = 0;
+// Возвращает битовую маску найденных чипов: бит0=гиро L3G4200D (0x68/0x69 —
+// зависит от запайки SDO), бит1=аксель ADXL345 (0x53),
+// бит2=магнит HMC5883L (0x1E), бит3=баро BMP180 (0x77).
+// Рабочий минимум для наклона и guard'а — гиро+аксель (маска 0x03);
+// магнит нужен только для 9-DOF yaw, баро руке не нужно вовсе.
+static int gy80Mask = 0;
 
 static bool i2cPing(uint8_t addr) {
     Wire.beginTransmission(addr);
     return Wire.endTransmission() == 0;
 }
 
+// Состояние GYR-кружка по маске scanGY80():
+// 2 = гиро+аксель (зелёный), 1 = только гиро (жёлтый), 0 = нет гиро (красный).
+// Магнит для кружка не нужен (только для будущего 9-DOF yaw).
+static uint8_t gy80State() {
+    if (!(gy80Mask & 0x01)) return 0;
+    return (gy80Mask & 0x02) ? 2 : 1;
+}
+
 static int scanGY80() {
-    int found = 0;
-    if (i2cPing(0x68) || i2cPing(0x69)) found++;  // гиро
-    if (i2cPing(0x53)) found++;                    // аксель
-    if (i2cPing(0x1E)) found++;                    // магнит
-    if (i2cPing(0x77)) found++;                    // баро
-    return found;
+    int mask = 0;
+    if (i2cPing(0x68) || i2cPing(0x69)) mask |= 0x01;  // гиро
+    if (i2cPing(0x53)) mask |= 0x02;                   // аксель
+    if (i2cPing(0x1E)) mask |= 0x04;                   // магнит
+    if (i2cPing(0x77)) mask |= 0x08;                   // баро
+    return mask;
 }
 
 void setup() {
@@ -1653,12 +1662,17 @@ void setup() {
         Serial.println("PCA9685: NOT FOUND (debug mode)");
     }
 
-    // Поиск GY-80 (железо воткнуто или нет — драйвер позже, см. TODO)
-    gy80Found = scanGY80();
+    // Поиск GY-80 (железо воткнуто или нет — драйвер позже, см. TODO).
+    // Кружок: зелёный = гиро+аксель, жёлтый = только гиро, красный = нет гиро.
+    gy80Mask = scanGY80();
     xSemaphoreTake(displayMutex, portMAX_DELAY);
-    sharedState.imuReady = (gy80Found == 4);
+    sharedState.imuState = gy80State();
     xSemaphoreGive(displayMutex);
-    Serial.printf("GY-80: FOUND %d/4 (gyro/acc/mag/baro)\n", gy80Found);
+    Serial.printf("GY-80: gyro=%c acc=%c mag=%c baro=%c\n",
+                  (gy80Mask & 0x01) ? '+' : '-',
+                  (gy80Mask & 0x02) ? '+' : '-',
+                  (gy80Mask & 0x04) ? '+' : '-',
+                  (gy80Mask & 0x08) ? '+' : '-');
 
     // Связывание интерполятора с зависимостями
     interpolator.setServoController(&servoCtrl);
@@ -1796,7 +1810,7 @@ void setup() {
     memset(&sharedState, 0, sizeof(sharedState));
     sharedState.safetyEnabled = safety.isEnabled();
     sharedState.pcaReady = servoCtrl.isPcaAvailable();
-    sharedState.imuReady = (gy80Found == 4);
+    sharedState.imuState = gy80State();
     sharedState.tcpPosition = fkSolver.getEndEffector(homeAngles.angles);
     for (int i = 0; i < 7; i++) {
         sharedState.servoAngles[i] = homeAngles.angles[i];
@@ -1983,16 +1997,17 @@ void displayInit() {
     drawZoneHeader(ZONE_TCP_Y,    "TCP POS.");
     drawZoneHeader(ZONE_JOINTS_Y, "JOINTS");
 
-    // Версия прошивки под строкой захвата (следующая строка зоны, y=+66).
+    // Версия прошивки в строке заголовка TCP (прижата вправо).
     // Рисуем один раз здесь (константа): в displayUpdate не трогаем —
-    // так мерцания нет по построению.
+    // так мерцания нет по построению. Раскладка (кегль 2 = 12 px/символ):
+    // "TCP POS." 4..100, "FW: 6(1.5)" 10 символов = 120 px → x=116..236.
     {
-        char fwBuf[24];
-        snprintf(fwBuf, sizeof(fwBuf), "FW version %lu (%s)",
+        char fwBuf[16];
+        snprintf(fwBuf, sizeof(fwBuf), "FW: %lu(%s)",
                  (unsigned long)FW_VERSION, FW_VERSION_STR);
         tft.setTextSize(2);
-        tft.setTextColor(COLOR_STATUS_VALUE, TFT_BLACK);
-        tft.setCursor(4, ZONE_JOINTS_Y + HEADER_H + 66);
+        tft.setTextColor(COLOR_ZONE_HEADER_FG, COLOR_ZONE_HEADER_BG);
+        tft.setCursor(240 - 4 - (int)strlen(fwBuf) * 12, ZONE_TCP_Y + 2);
         tft.print(fwBuf);
     }
 
@@ -2102,7 +2117,8 @@ void displayUpdate() {
     tft.print(state.safetyEnabled ? "ON " : "OFF");
 
     // --- Строка 2: Safe + PCA-кружок + GYR-кружок ---
-    // Кружок = наличие железа (зелёный/красный); текст не пишем.
+    // Кружок = наличие железа; GYR трёхцветный: зелёный = гиро+аксель,
+    // жёлтый = только гиро, красный = нет гиро. Текст не пишем.
     // Перерисовка поверх тем же центром/радиусом полностью перекрывает
     // старый кружок — мерцания нет. Раскладка: Safe 4..100, PCA 110..170,
     // GYR 180..237 (кегль 2 = 12 px/символ, кружок r=4).
@@ -2114,7 +2130,9 @@ void displayUpdate() {
     tft.setCursor(180, sy);
     tft.setTextColor(COLOR_STATUS_LABEL, TFT_BLACK);
     tft.print("GYR:");
-    tft.fillCircle(233, sy + 8, 4, state.imuReady ? TFT_GREEN : TFT_RED);
+    uint16_t gyrColor = (state.imuState >= 2) ? TFT_GREEN
+                      : (state.imuState == 1) ? TFT_YELLOW : TFT_RED;
+    tft.fillCircle(233, sy + 8, 4, gyrColor);
 
     // --- Строка 3: последняя команда (как есть, до 20 символов) ---
     // Добиваем пробелами до фиксированной ширины 20 символов = 240 px при size=2.
