@@ -111,6 +111,12 @@ class Keyboard:
             self.fd = sys.stdin.fileno()
             self.old = termios.tcgetattr(self.fd)
             tty.setraw(self.fd)
+            # setraw гасит OPOST/ONLCR всего терминала — print("\n")
+            # перестаёт возвращать каретку (строки «лесенкой»).
+            # Возвращаем обработку ВЫВОДА, ввод остаётся raw.
+            mode = termios.tcgetattr(self.fd)
+            mode[1] |= termios.OPOST | termios.ONLCR
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, mode)
 
     def get(self, timeout=0.1):
         if self.win:
