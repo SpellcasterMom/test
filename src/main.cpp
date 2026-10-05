@@ -2,11 +2,11 @@
  * Project     : 6DOF arm
  * Codename    : CLAW
  * Author      : Vladimir V. Laykov aka Yago
+ * Alma Mater  : Sevastopol State University
  * Group       : УТС/б-23-1-о
  * Mentor      : Lipko I.Y.
- * Alma Mater  : Sevastopol State University
  * Date        : 2026-09-18
- * Last modify : 2026-10-01
+ * Last modify : 2026-10-05
  *
  * Основной файл контроллера 6-осевого робота-манипулятора на ESP32.
  *
