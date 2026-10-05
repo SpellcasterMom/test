@@ -1,5 +1,6 @@
 /**
  * Project     : 6DOF arm
+ * Codename    : CLAW
  * Author      : Vladimir V. Laykov aka Yago
  * Group       : УТС/б-23-1-о
  * Mentor      : Lipko I.Y.
