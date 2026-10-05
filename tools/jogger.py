@@ -11,6 +11,7 @@ Last modify : 2026-10-05
 Пары клавиш на серву (+/-):  q/a=P1  w/s=P2  e/d=P3  r/f=P4
                               t/g=P5  y/h=P6  u/j=P7
 Строчная буква — шаг 5°, ЗАГЛАВНАЯ (Shift) — шаг 25°.
+`0` — все сервы в 0 (M104 P1=0 .. P7=0).
 `~` — опросить M105 и показать что вернулось.
 `?` — помощь.  Esc / Ctrl-C — выход.
 
@@ -50,7 +51,7 @@ KEYS = {
 }
 
 HELP = """клавиши: q/a=P1 w/s=P2 e/d=P3 r/f=P4 t/g=P5 y/h=P6 u/j=P7 (+/-)
-  строчная = шаг %.0f°, ЗАГЛАВНАЯ = шаг %.0f°   `~` = M105   `?` = помощь   Esc = выход""" % (STEP_SMALL, STEP_BIG)
+  строчная = шаг %.0f°, ЗАГЛАВНАЯ = шаг %.0f°   `0` = все в 0   `~` = M105   `?` = помощь   Esc = выход""" % (STEP_SMALL, STEP_BIG)
 
 
 def open_serial(port, baud):
@@ -189,6 +190,20 @@ def main():
                 break
             if ch == '?':
                 print(HELP)
+                continue
+            if ch == '0':
+                cmd = " ".join([f"P{i+1}=0" for i in range(7)])
+                cmd = "M104 " + cmd
+                print(f">> {cmd}   (все в 0)", flush=True)
+                res, rlines = send(ser, cmd, 30)
+                err = next((l for l in rlines if l.upper().startswith("ERROR")), None)
+                if err:
+                    print(f"  < {err} — углы НЕ обновлены", flush=True)
+                else:
+                    angles = [0.0] * 7
+                    print(f"  < {res}", flush=True)
+                print(flush=True)
+                kb.drain()
                 continue
             if ch == '~' or ch == '`':
                 print(">> M105", flush=True)
