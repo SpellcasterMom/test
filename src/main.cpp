@@ -70,7 +70,7 @@
  * =====================================================================
  *
  *   ┌─────────────────────────────────────┐  y=0
- *   │ TCP POS.                            │  заголовок
+ *   │ TCP POS.              FW: 6(1.5)     │  заголовок + версия справа
  *   ├─────────────────────────────────────┤  y=16
  *   │ X:   415mm    Roll:        90  │
  *   │ Y:     0mm    Pitch:        0  │
@@ -82,7 +82,6 @@
  *   │ P2:  -40     P5:    0               │
  *   │ P3:    0     P6:    0               │
  *   │ Gripper:   50%                      │
- *   │ FW version 1 (1.0)                   │
  *   ├─────────────────────────────────────┤  y=176
  *   │ READY           ABS            123  │  статус + режим + счётчик
  *   │ Safe:ON     PCA:●     GYR:●          │  режимы текстом, железо кружками
@@ -1983,16 +1982,17 @@ void displayInit() {
     drawZoneHeader(ZONE_TCP_Y,    "TCP POS.");
     drawZoneHeader(ZONE_JOINTS_Y, "JOINTS");
 
-    // Версия прошивки под строкой захвата (следующая строка зоны, y=+66).
+    // Версия прошивки в строке заголовка TCP (прижата вправо).
     // Рисуем один раз здесь (константа): в displayUpdate не трогаем —
-    // так мерцания нет по построению.
+    // так мерцания нет по построению. Раскладка (кегль 2 = 12 px/символ):
+    // "TCP POS." 4..100, "FW: 6(1.5)" 10 символов = 120 px → x=116..236.
     {
-        char fwBuf[24];
-        snprintf(fwBuf, sizeof(fwBuf), "FW version %lu (%s)",
+        char fwBuf[16];
+        snprintf(fwBuf, sizeof(fwBuf), "FW: %lu(%s)",
                  (unsigned long)FW_VERSION, FW_VERSION_STR);
         tft.setTextSize(2);
-        tft.setTextColor(COLOR_STATUS_VALUE, TFT_BLACK);
-        tft.setCursor(4, ZONE_JOINTS_Y + HEADER_H + 66);
+        tft.setTextColor(COLOR_ZONE_HEADER_FG, COLOR_ZONE_HEADER_BG);
+        tft.setCursor(240 - 4 - (int)strlen(fwBuf) * 12, ZONE_TCP_Y + 2);
         tft.print(fwBuf);
     }
 
