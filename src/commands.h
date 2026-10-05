@@ -23,6 +23,7 @@ void handleG91(GCodeCommand &cmd);
 
 void handleM104(GCodeCommand &cmd);
 void handleM105(GCodeCommand &cmd);
+void handleM108(GCodeCommand &cmd);
 void handleM114(GCodeCommand &cmd);
 void handleM115(GCodeCommand &cmd);
 void handleM112(GCodeCommand &cmd);
@@ -185,6 +186,18 @@ const CommandDef COMMANDS[] = {
         .params = {},
         .paramCount = 0,
         .handler = handleM105,
+    },
+    {
+        .name = "M108",
+        .description = "Set gripper: M108 S=50 (percent 0-100)",
+        // Параметры M108:
+        //   S — открытие захвата в процентах (0=закрыт, 100=открыт)
+        //       Пример: M108 S=75 — открыть захват на 75%
+        .params = {
+            {'S', PARAM_FLOAT, -1, 50.0},
+        },
+        .paramCount = 1,
+        .handler = handleM108,
     },
     {
         .name = "M114",

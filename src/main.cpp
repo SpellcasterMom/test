@@ -1006,6 +1006,60 @@ void handleM105(GCodeCommand &cmd) {
 }
 
 /**
+ * M108 — захват в процентах: M108 S=50 (0=закрыт, 100=открыт).
+ * P7 живёт в math-шкале 0..100, поэтому процент = угол 1:1.
+ * Едет только сустав 6 через тот же interpolator, что M104.
+ */
+void handleM108(GCodeCommand &cmd) {
+    const int SI = 'S' - 'A';
+    if (!cmd.hasParam[SI]) {
+        strncpy(diagLast.failReason, "M108 requires S (0-100)",
+                sizeof(diagLast.failReason) - 1);
+        xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
+        sharedState.hasError = true;
+        snprintf(sharedState.lastError, sizeof(sharedState.lastError), "M108 needs S=0..100");
+        xSemaphoreGive(displayMutex);
+        Serial.println("ERROR: M108 requires S (0-100)");
+        return;
+    }
+    float pct = cmd.params[SI];
+    if (pct < 0.0f) pct = 0.0f;
+    if (pct > 100.0f) pct = 100.0f;
+    JointAngles target = currentAngles;
+    target.angles[6] = pct;
+    float feedrate = cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE;
+    interpolator.setCurrentAngles(currentAngles);
+    if (interpolator.moveTo(target, feedrate)) {
+        xSemaphoreTake(angleMutex, portMAX_DELAY);
+        currentAngles = target;
+        xSemaphoreGive(angleMutex);
+
+        xSemaphoreTake(displayMutex, portMAX_DELAY);
+        sharedState.servoAngles[6] = target.angles[6];
+        sharedState.gripperPercent = pct;
+        sharedState.isMoving = false;
+        sharedState.hasError = false;
+        sharedState.commandCount++;
+        xSemaphoreGive(displayMutex);
+
+        diagBegin("DIRECT", 0);
+        diagLast.anglesOnly = true;
+        diagEvalSol(diagLast.sols[0], target, cmd.pose);
+        diagLast.solCount = 1;
+        diagLast.chosen = 0;
+        Serial.printf("OK: Gripper %.0f%%\n", pct);
+    } else {
+        strncpy(diagLast.failReason, "Move failed (interpolator/safety)",
+                sizeof(diagLast.failReason) - 1);
+        xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
+        sharedState.hasError = true;
+        snprintf(sharedState.lastError, sizeof(sharedState.lastError), "M108 move failed");
+        xSemaphoreGive(displayMutex);
+        Serial.println("ERROR: M108 move failed (safety/interpolator)");
+    }
+}
+
+/**
  * M114 — вывод текущей позиции энд-эффектора (FK).
  */
 void handleM114(GCodeCommand &cmd) {
@@ -1402,6 +1456,7 @@ void handleHelp(GCodeCommand &cmd) {
     Serial.println("G91                           - Relative mode");
     Serial.println("M104 P1=90 P2=0 ..            - Set servo angles directly");
     Serial.println("M105                          - Report servo angles");
+    Serial.println("M108 S=50                     - Set gripper (percent 0-100)");
     Serial.println("M114                          - Report position (FK)");
     Serial.println("M115 [S=1]                    - Kinematics diag (target/sols/actual)");
     Serial.println("M112                          - Emergency stop");
