@@ -131,6 +131,33 @@ void ImuLogger::push(const ImuSample &s) {
     if (count_ < IMU_LOG_N) count_++;
 }
 
+// Переинит регистров после просадки/рыва шины (чип мог сброситься в дефолт).
+// Только прямые записи, никакого Wire.begin() — шиной владеет вызывающий
+// (держать i2cMutex!). L3G::enableDefault безопасен: одни writeReg.
+void ImuLogger::reinitChips() {
+    if (hasGyro_) ((L3G *)gyro_)->enableDefault();
+    if (hasAcc_) {
+        imuWriteReg(0x53, ADXL345_POWER_CTL, 0);
+        imuWriteReg(0x53, ADXL345_POWER_CTL, 16);
+        imuWriteReg(0x53, ADXL345_POWER_CTL, 8);
+        imuWriteReg(0x53, ADXL345_DATA_FORMAT, 0x0B);
+        imuWriteReg(0x53, ADXL345_BW_RATE, ADXL345_BW_200);
+    }
+}
+
+// Жёсткое восстановление шины: периферия I2C реинитится, чипы — следом.
+// Вызывать только держа i2cMutex (все остальные молчат в это время).
+void ImuLogger::recoverBus() {
+    Wire.end();
+    delay(5);
+    Wire.begin(21, 22);
+    Wire.setClock(400000);
+    Wire.setTimeout(20);
+    reinitChips();
+    busFails_ = 0;
+    Serial.println("IMU: bus recovered");
+}
+
 void ImuLogger::poll() {
     if (!hasGyro_ && !hasAcc_) return;
     // Запись идёт пока движется интерполятор. Сброс кольца — только если
@@ -153,17 +180,29 @@ void ImuLogger::poll() {
     if (!imuTake(50)) return;  // шина занята сервами — сэмпл пропускаем
     int ax = 0, ay = 0, az = 0;
     int16_t gx = 0, gy = 0, gz = 0;
+    bool burstOk = true;
     if (hasAcc_) {
         int x, y, z;
-        ((ADXL345 *)acc_)->readAccel(&x, &y, &z);
-        ax = x; ay = y; az = z;
+        ADXL345 *a = (ADXL345 *)acc_;
+        // status/error_code у либы залипающие — сбрасываем перед чтением,
+        // иначе один дребезг контакта вечно считается аварией.
+        a->status = ADXL345_OK;
+        a->error_code = ADXL345_NO_ERROR;
+        a->readAccel(&x, &y, &z);
+        if (a->status != ADXL345_OK) burstOk = false;
+        else { ax = x; ay = y; az = z; }
     }
     if (hasGyro_) {
         L3G *g = (L3G *)gyro_;
         g->read();
-        if (!g->timeoutOccurred()) {
-            gx = g->g.x; gy = g->g.y; gz = g->g.z;
-        }
+        if (g->timeoutOccurred()) burstOk = false;
+        else { gx = g->g.x; gy = g->g.y; gz = g->g.z; }
+    }
+    if ((hasGyro_ || hasAcc_) && !burstOk) {
+        // Дребезг Dupont / просадка: чиним сами, молча до 100 подряд.
+        if (++busFails_ > 100) recoverBus();  // ~0.5 с дохлой шины
+    } else {
+        busFails_ = 0;
     }
     imuGive();
 

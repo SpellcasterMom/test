@@ -84,6 +84,8 @@ private:
     static void taskTrampoline(void *arg);
     void poll();                       // один тик 5 мс
     void push(const ImuSample &s);
+    void reinitChips();                // переинит регистров после просадки
+    void recoverBus();                 // Wire.end/begin + reinitChips
 
     // Комплементарный фьюжн наклона (deg). Замена на EKF — только здесь.
     void imuFuse(float gxDps, float gyDps, float axMg, float ayMg, float azMg);
@@ -103,6 +105,7 @@ private:
     bool prevAccValid_ = false;
 
     MotionInterpolator *interp_ = nullptr;
+    uint32_t busFails_ = 0;   // подряд идущие битые транзакции
     static ImuSample ring_[IMU_LOG_N];
     volatile uint32_t head_ = 0;    // куда пишем следующим
     volatile uint32_t count_ = 0;   // сколько валидных (<= N)

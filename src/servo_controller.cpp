@@ -27,6 +27,7 @@ void ServoController::init() {
     // I2C явно: пины ESP32 + 400 кГц (как в проверенном стенде).
     Wire.begin(21, 22);
     Wire.setClock(400000);
+    Wire.setTimeout(20);  // все транзакции bounded: зависшая шина не вешает задачу
 
     // Проверяем, отвечает ли PCA9685 по I2C
     Wire.beginTransmission(0x40);
@@ -140,15 +141,22 @@ void ServoController::setAngle(int servoId, float angle) {
     // ШАГ 5: запись ширины импульса в канал PCA9685 (janelia берёт мкс).
     // Каналы 0–5 — сервоприводы 6DOF, канал 6 — захватчик.
     // Шина I2C общая с GY-80: сериализуем с IMU-задачей (Core 1).
+    // Брать мьютекс — с ТАЙМАУТОМ, не вечно: если шина клинит (просадка
+    // питания сервами посреди чужой транзакции), пропуск одного шага 20 мс
+    // незаметен, а вечное ожидание роняло бы всё движение целиком.
     if (pca9685Available) {
         extern SemaphoreHandle_t i2cMutex;
         bool i2cLocked = false;
         if (i2cMutex) {
-            xSemaphoreTake(i2cMutex, portMAX_DELAY);
-            i2cLocked = true;
+            i2cLocked = (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(100)) == pdTRUE);
+        } else {
+            i2cLocked = true;  // мьютекса ещё нет (ранний setup) — шина наша
         }
-        pwm.setChannelServoPulseDuration((uint16_t)servoId, pulseUs);
-        if (i2cLocked) xSemaphoreGive(i2cMutex);
+        if (i2cLocked) {
+            pwm.setChannelServoPulseDuration((uint16_t)servoId, pulseUs);
+            if (i2cMutex) xSemaphoreGive(i2cMutex);
+        }
+        // else: шаг пропущен, currentAngles ниже всё равно обновится
     }
 
     // ШАГ 6: сохраняем МАТЕМАТИЧЕСКИЙ угол (без offset и коррекции) —
