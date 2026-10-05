@@ -2,7 +2,7 @@
 """
 Project     : 6DOF arm (CLAW)
 Author      : Vladimir V. Laykov aka Yago
-Almamater   : Sevastopol State University
+Alma Mater  : Sevastopol State University
 Date        : 2026-10-05
 Last modify : 2026-10-05
 

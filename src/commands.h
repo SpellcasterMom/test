@@ -2,7 +2,7 @@
  * Project     : 6DOF arm
  * Codename    : CLAW
  * Author      : Vladimir V. Laykov aka Yago
- * Almamater   : Sevastopol State University
+ * Alma Mater  : Sevastopol State University
  * Group       : УТС/б-23-1-о
  * Mentor      : Lipko I.Y.
  * Date        : 2026-09-18
