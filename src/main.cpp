@@ -85,7 +85,7 @@
  *   │ FW version 1 (1.0)                   │
  *   ├─────────────────────────────────────┤  y=176
  *   │ READY           ABS            123  │  статус + режим + счётчик
- *   │ Safe:ON         PCA:OFF              │  safety + PCA
+ *   │ Safe:ON     PCA:●     GYR:●          │  режимы текстом, железо кружками
  *   │ G28                                 │  последняя команда
  *   └─────────────────────────────────────┘  y=240
  *
@@ -114,6 +114,7 @@
 // #include <TFT_eSPI.h>
 #include <LovyanGFX.hpp>
 #include <SPI.h>
+#include <Wire.h>
 #include <cmath>
 #include "config.h"
 #include "types.h"
@@ -234,6 +235,7 @@ struct SharedState {
     bool        isMoving;         // Флаг движения
     bool        safetyEnabled;    // Состояние безопасности
     bool        pcaReady;         // PCA9685 найден на I2C
+    bool        imuReady;         // GY-80 найден на I2C (все 4 чипа)
     bool        hasError;         // Есть ошибка
     char        lastError[64];    // Текст последней ошибки
     char        lastCommand[24];  // Последняя полученная команда
@@ -1602,6 +1604,26 @@ void core1Task(void *pvParameters) {
 // ====================================================================
 // setup() — инициализация
 // ====================================================================
+// GY-80 на общей I2C (SDA=21/SCL=22, Wire уже поднят servoCtrl.init()).
+// Возвращает число найденных чипов (0-4): гиро L3G4200D (0x68/0x69 —
+// зависит от запайки SDO), аксель ADXL345 (0x53), магнит HMC5883L (0x1E),
+// баро BMP180 (0x77).
+static int gy80Found = 0;
+
+static bool i2cPing(uint8_t addr) {
+    Wire.beginTransmission(addr);
+    return Wire.endTransmission() == 0;
+}
+
+static int scanGY80() {
+    int found = 0;
+    if (i2cPing(0x68) || i2cPing(0x69)) found++;  // гиро
+    if (i2cPing(0x53)) found++;                    // аксель
+    if (i2cPing(0x1E)) found++;                    // магнит
+    if (i2cPing(0x77)) found++;                    // баро
+    return found;
+}
+
 void setup() {
     Serial.begin(115200);
     delay(1000);
@@ -1630,6 +1652,13 @@ void setup() {
     } else {
         Serial.println("PCA9685: NOT FOUND (debug mode)");
     }
+
+    // Поиск GY-80 (железо воткнуто или нет — драйвер позже, см. TODO)
+    gy80Found = scanGY80();
+    xSemaphoreTake(displayMutex, portMAX_DELAY);
+    sharedState.imuReady = (gy80Found == 4);
+    xSemaphoreGive(displayMutex);
+    Serial.printf("GY-80: FOUND %d/4 (gyro/acc/mag/baro)\n", gy80Found);
 
     // Связывание интерполятора с зависимостями
     interpolator.setServoController(&servoCtrl);
@@ -1767,6 +1796,7 @@ void setup() {
     memset(&sharedState, 0, sizeof(sharedState));
     sharedState.safetyEnabled = safety.isEnabled();
     sharedState.pcaReady = servoCtrl.isPcaAvailable();
+    sharedState.imuReady = (gy80Found == 4);
     sharedState.tcpPosition = fkSolver.getEndEffector(homeAngles.angles);
     for (int i = 0; i < 7; i++) {
         sharedState.servoAngles[i] = homeAngles.angles[i];
@@ -2071,11 +2101,20 @@ void displayUpdate() {
     tft.setTextColor(state.safetyEnabled ? TFT_GREEN : TFT_RED, TFT_BLACK);
     tft.print(state.safetyEnabled ? "ON " : "OFF");
 
+    // --- Строка 2: Safe + PCA-кружок + GYR-кружок ---
+    // Кружок = наличие железа (зелёный/красный); текст не пишем.
+    // Перерисовка поверх тем же центром/радиусом полностью перекрывает
+    // старый кружок — мерцания нет. Раскладка: Safe 4..100, PCA 110..170,
+    // GYR 180..237 (кегль 2 = 12 px/символ, кружок r=4).
     tft.setCursor(110, sy);
     tft.setTextColor(COLOR_STATUS_LABEL, TFT_BLACK);
     tft.print("PCA:");
-    tft.setTextColor(state.pcaReady ? TFT_GREEN : TFT_RED, TFT_BLACK);
-    tft.print(state.pcaReady ? "ON " : "OFF");
+    tft.fillCircle(166, sy + 8, 4, state.pcaReady ? TFT_GREEN : TFT_RED);
+
+    tft.setCursor(180, sy);
+    tft.setTextColor(COLOR_STATUS_LABEL, TFT_BLACK);
+    tft.print("GYR:");
+    tft.fillCircle(233, sy + 8, 4, state.imuReady ? TFT_GREEN : TFT_RED);
 
     // --- Строка 3: последняя команда (как есть, до 20 символов) ---
     // Добиваем пробелами до фиксированной ширины 20 символов = 240 px при size=2.
