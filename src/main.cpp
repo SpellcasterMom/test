@@ -1872,11 +1872,14 @@ void setup() {
     strncpy(sharedState.lastCommand, "-", sizeof(sharedState.lastCommand) - 1);
 
     // Стартовый заезд в home + калибровка нуля гиро (только если IMU есть).
-    // ВНИМАНИЕ: движение вслепую из неизвестной позы — медленно (30%) и
-    // только в home (поза покоя). Если safety откажет — не страшно: для bias
-    // нужна лишь неподвижность, а не сама поза. Рука должна стоять смирно!
+    // Едем штатным G28 (а не прямым moveTo): там safety-пречек цели, синк
+    // стейта и диагностика. ВНИМАНИЕ: движение вслепую из неизвестной позы
+    // на скорости G28 — рука должна стоять свободно. Если safety откажет —
+    // не страшно: для bias нужна лишь неподвижность, а не сама поза.
+    // Рука должна стоять смирно!
     if (imuLogger.ready()) {
-        interpolator.moveTo(homeAngles, 30.0f);
+        GCodeCommand cmd28;  // пустая = без H1, едем в homeAngles
+        handleG28(cmd28);
         xSemaphoreTake(displayMutex, portMAX_DELAY);
         sharedState.isCalibrating = true;
         xSemaphoreGive(displayMutex);
