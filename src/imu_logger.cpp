@@ -151,7 +151,7 @@ void ImuLogger::recoverBus() {
     Wire.end();
     delay(5);
     Wire.begin(21, 22);
-    Wire.setClock(400000);
+    Wire.setClock(100000);  // см. servo init: подтяжки 11к, только 100 кГц
     Wire.setTimeout(20);
     reinitChips();
     busFails_ = 0;
