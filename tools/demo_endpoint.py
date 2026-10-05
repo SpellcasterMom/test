@@ -92,7 +92,7 @@ def send(ser, cmd, timeout=120.0):
         buf += ser.read_all().decode(errors="ignore")
         for line in buf.split("\n"):
             s = line.strip()
-            if s == "OK":
+            if s == "OK" or s.startswith("OK:"):
                 return True, ""
             if s.startswith("ERROR"):
                 return False, s
