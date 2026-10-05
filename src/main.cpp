@@ -1881,9 +1881,12 @@ void setup() {
         sharedState.isCalibrating = true;
         xSemaphoreGive(displayMutex);
         // Задача дисплея ещё не создана — рисуем CALIB напрямую.
+        // Литералы вместо ZONE_STATUS_Y/COLOR_MOVING: их #define идут
+        // ниже по файлу (176 / TFT_YELLOW), setup выше — компилятор иначе
+        // не видит. Значения сверены с дефайнами, не магические.
         tft.setTextSize(2);
-        tft.setCursor(4, ZONE_STATUS_Y + 8);
-        tft.setTextColor(COLOR_MOVING, TFT_BLACK);
+        tft.setCursor(4, 176 + 8);
+        tft.setTextColor(TFT_YELLOW, TFT_BLACK);
         tft.print(">> CALIB");
         Serial.println("IMU CAL: стоим в home, не трогать руку (отстойка + 2с нуля)...");
         delay(1500);  // отстойка механики: звон MG90S + выборка люфта
