@@ -6,7 +6,7 @@
  * Group       : УТС/б-23-1-о
  * Mentor      : Lipko I.Y.
  * Date        : 2026-09-18
- * Last modify : 2026-10-01
+ * Last modify : 2026-10-05
  */
 
 #include "servo_controller.h"
@@ -139,8 +139,16 @@ void ServoController::setAngle(int servoId, float angle) {
 
     // ШАГ 5: запись ширины импульса в канал PCA9685 (janelia берёт мкс).
     // Каналы 0–5 — сервоприводы 6DOF, канал 6 — захватчик.
+    // Шина I2C общая с GY-80: сериализуем с IMU-задачей (Core 1).
     if (pca9685Available) {
+        extern SemaphoreHandle_t i2cMutex;
+        bool i2cLocked = false;
+        if (i2cMutex) {
+            xSemaphoreTake(i2cMutex, portMAX_DELAY);
+            i2cLocked = true;
+        }
         pwm.setChannelServoPulseDuration((uint16_t)servoId, pulseUs);
+        if (i2cLocked) xSemaphoreGive(i2cMutex);
     }
 
     // ШАГ 6: сохраняем МАТЕМАТИЧЕСКИЙ угол (без offset и коррекции) —

@@ -129,6 +129,7 @@
 #include "jog_pendant.h"
 #include "detour_planner.h"
 #include "eeprom_storage.h"
+#include "imu_logger.h"
 
 // Пины SPI для ST7789 заданы в классе LGFX ниже (VSPI).
 // Отдельные #define не нужны.
@@ -168,6 +169,11 @@ SafetyChecker        safety;
 GripperController    gripper;
 JogPendant           pendant;   // ручной пульт: штурвал + NEXT + E-STOP
 DetourPlanner        detour;    // объезд запретных зон: план вейпоинтов
+ImuLogger            imuLogger; // GY-80: опрос 200 Гц + кольцо последнего движения
+
+// Мьютекс общей шины I2C (PCA9685 на Core 0 + GY-80 на Core 1).
+// Создаётся первым в setup; брать только вокруг коротких транзакций.
+SemaphoreHandle_t    i2cMutex = NULL;
 
 // Хранилище EEPROM: сохранение и загрузка конфигурации
 EEPROMStorage        storage;
@@ -232,6 +238,7 @@ struct SharedState {
     float       servoAngles[7];   // Углы 7 сервоприводов (градусы)
     float       gripperPercent;   // Процент открытия захвата (0-100%)
     bool        isMoving;         // Флаг движения
+    bool        isCalibrating;    // Идёт калибровка IMU (дисплей CALIB)
     bool        safetyEnabled;    // Состояние безопасности
     bool        pcaReady;         // PCA9685 найден на I2C
     uint8_t     imuState;         // GYR: 0=нет гиро (красный), 1=гиро без акселя (жёлтый), 2=гиро+аксель (зелёный)
@@ -1004,6 +1011,46 @@ void handleM104(GCodeCommand &cmd) {
 /**
  * M105 — вывод текущих углов сервоприводов.
  */
+/**
+ * M119 — телеметрия IMU (GY-80): живые значения, пики, дамп кольца.
+ *   M119          — живые: наклон, последние counts, bias, пики, счётчик
+ *   M119 S=1      — дамп кольца текстом (#IMU строки + OK в конце)
+ *   M119 S=1 D=4  — дамп каждого 4-го сэмпла (быстрее)
+ */
+void handleM119(GCodeCommand &cmd) {
+    if (!imuLogger.hasGyro() && !imuLogger.hasAcc()) {
+        Serial.println("IMU: none (GY-80 not found)");
+        Serial.println("OK");
+        return;
+    }
+    bool dump = cmd.hasParam['S' - 'A'] && cmd.params['S' - 'A'] != 0.0f;
+    if (!dump) {
+        float tr, tp;
+        imuLogger.getTilt(tr, tp);
+        int16_t last[6];
+        imuLogger.getLast(last);
+        float bx, by, bz;
+        imuLogger.getBiasDps(bx, by, bz);
+        float pkA, pkJ;
+        imuLogger.getPeaks(pkA, pkJ);
+        Serial.printf("IMU: tilt R=%.1f P=%.1f\n", tr, tp);
+        Serial.printf("IMU: last ax=%d ay=%d az=%d gx=%d gy=%d gz=%d\n",
+                      last[0], last[1], last[2], last[3], last[4], last[5]);
+        Serial.printf("IMU: bias dps gx=%.2f gy=%.2f gz=%.2f\n", bx, by, bz);
+        Serial.printf("IMU: peak acc=%.2fg jerk=%.1fg/s log n=%lu rec=%d\n",
+                      pkA, pkJ, (unsigned long)imuLogger.sampleCount(),
+                      imuLogger.isRecording() ? 1 : 0);
+        Serial.println("OK");
+        return;
+    }
+    uint8_t decim = 1;
+    if (cmd.hasParam['D' - 'A'] && cmd.params['D' - 'A'] >= 1.0f)
+        decim = (uint8_t)cmd.params['D' - 'A'];
+    imuLogger.setHold(true);   // заморозить кольцо на время печати
+    imuLogger.dump(decim);
+    imuLogger.setHold(false);
+}
+
 void handleM105(GCodeCommand &cmd) {
     printServoAngles();
 }
@@ -1460,6 +1507,7 @@ void handleHelp(GCodeCommand &cmd) {
     Serial.println("M104 P1=90 P2=0 ..            - Set servo angles directly");
     Serial.println("M105                          - Report servo angles");
     Serial.println("M108 S=50                     - Set gripper (percent 0-100)");
+    Serial.println("M119 [S=1] [D=4]               - IMU live / dump ring log");
     Serial.println("M114                          - Report position (FK)");
     Serial.println("M115 [S=1]                    - Kinematics diag (target/sols/actual)");
     Serial.println("M112                          - Emergency stop");
@@ -1646,6 +1694,7 @@ void setup() {
     // Создание мьютексов ДО первого использования
     angleMutex = xSemaphoreCreateMutex();
     displayMutex = xSemaphoreCreateMutex();
+    i2cMutex = xSemaphoreCreateMutex();  // шина Wire: сервы + GY-80
 
     // Инициализация PCA9685
     servoCtrl.init();
@@ -1673,6 +1722,11 @@ void setup() {
                   (gy80Mask & 0x02) ? '+' : '-',
                   (gy80Mask & 0x04) ? '+' : '-',
                   (gy80Mask & 0x08) ? '+' : '-');
+
+    // IMU-логгер: драйвер по маске найденного + указатель на интерполятор
+    // (запись идёт пока isMoving). Задача стартует после калибровки ниже.
+    imuLogger.begin(gy80Mask);
+    imuLogger.setInterpolator(&interpolator);
 
     // Связывание интерполятора с зависимостями
     interpolator.setServoController(&servoCtrl);
@@ -1817,6 +1871,30 @@ void setup() {
     }
     strncpy(sharedState.lastCommand, "-", sizeof(sharedState.lastCommand) - 1);
 
+    // Стартовый заезд в home + калибровка нуля гиро (только если IMU есть).
+    // ВНИМАНИЕ: движение вслепую из неизвестной позы — медленно (30%) и
+    // только в home (поза покоя). Если safety откажет — не страшно: для bias
+    // нужна лишь неподвижность, а не сама поза. Рука должна стоять смирно!
+    if (imuLogger.ready()) {
+        interpolator.moveTo(homeAngles, 30.0f);
+        xSemaphoreTake(displayMutex, portMAX_DELAY);
+        sharedState.isCalibrating = true;
+        xSemaphoreGive(displayMutex);
+        // Задача дисплея ещё не создана — рисуем CALIB напрямую.
+        tft.setTextSize(2);
+        tft.setCursor(4, ZONE_STATUS_Y + 8);
+        tft.setTextColor(COLOR_MOVING, TFT_BLACK);
+        tft.print(">> CALIB");
+        Serial.println("IMU CAL: стоим в home, не трогать руку (отстойка + 2с нуля)...");
+        delay(1500);  // отстойка механики: звон MG90S + выборка люфта
+        imuLogger.calibrateGyro();
+        xSemaphoreTake(displayMutex, portMAX_DELAY);
+        sharedState.isCalibrating = false;
+        xSemaphoreGive(displayMutex);
+        Serial.println("IMU CAL: done");
+    }
+    imuLogger.startTask();  // опрос 200 Гц на Core 1 (после калибровки!)
+
     // Создание задач
     xTaskCreatePinnedToCore(core0Task, "Core0_Motion",  8192, NULL, 1, &core0TaskHandle, 0);
     xTaskCreatePinnedToCore(core1Task, "Core1_Display", 8192, NULL, 1, &core1TaskHandle, 1);
@@ -1897,7 +1975,7 @@ static float lastTCP[6]    = {99999, 99999, 99999, 99999, 99999, 99999};
 static float lastJoints[7] = {99999, 99999, 99999, 99999, 99999, 99999, 99999};
 static float lastGrip      = -1;
 static int8_t lastModeAbs  = -1;   // -1 = неизвестно, 0 = ABS, 1 = REL
-static int8_t lastStatus   = -1;   // -1 = неизвестно, 0 = READY, 1 = MOVING, 2 = ERROR
+static int8_t lastStatus   = -1;   // -1 = неизвестно, 0 = READY, 1 = MOVING, 2 = ERROR, 3 = CALIB
 static char lastCmdShown[24] = ""; // последняя выведенная команда (анти-мерцание)
 
 static void drawField(int xLabel, int xValue, int y,
@@ -2065,11 +2143,11 @@ void displayUpdate() {
     // === Status Bar (3 строки) ===
     int sy = ZONE_STATUS_Y + 8;
 
-    // --- Строка 1: READY / MOVING / ERROR + режим + счётчик справа ---
+    // --- Строка 1: READY / MOVING / ERROR / CALIB + режим + счётчик справа ---
     // Статус — только при смене (безусловная перерисовка даёт мерцание
     // и затирает соседей). Поле статуса ровно 8 символов (x=4..100),
-    // ABS начинается с x=110 — пересечений нет.
-    int8_t st = state.hasError ? 2 : (state.isMoving ? 1 : 0);
+    // ABS начинается с x=110 — пересечений нет. CALIB (8 симв.) как MOVING.
+    int8_t st = state.hasError ? 2 : (state.isCalibrating ? 3 : (state.isMoving ? 1 : 0));
     if (st != lastStatus) {
         lastStatus = st;
         tft.setTextSize(2);
@@ -2077,6 +2155,9 @@ void displayUpdate() {
         if (st == 2) {
             tft.setTextColor(COLOR_ERROR, TFT_BLACK);
             tft.print("! ERROR ");
+        } else if (st == 3) {
+            tft.setTextColor(COLOR_MOVING, TFT_BLACK);
+            tft.print(">> CALIB");
         } else if (st == 1) {
             tft.setTextColor(COLOR_MOVING, TFT_BLACK);
             tft.print("> MOVING");
