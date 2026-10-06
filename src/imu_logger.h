@@ -13,9 +13,11 @@
  * imu_logger.h — опрос GY-80 (гиро L3G4200D + аксель ADXL345) и кольцевой
  * журнал последнего движения для хоста.
  *
- * Состав:
- *   - драйвер по настоящему API либ: L3G::init/enableDefault/read (+g),
- *     ADXL345::powerOn/setRangeSetting/set_bw/readAccel;
+ * БЕЗ СТОРОННИХ ЛИБ: регистры читаем/пишем напрямую через Wire
+ * (спарковская и pololu-либы под RTOS чудили — unbounded циклы,
+ * повторный Wire.begin, залипающие статусы). Транспорт — 3 функции
+ * с жёсткими таймаутами ниже; всё остальное (фьюжн, кольцо, M119)
+ * от транспорта не зависит.
  *   - калибровка нуля гиро при старте (рука стоит в home);
  *   - комплементарный фьюжн наклона imuFuse() (замена на EKF — внутри,
  *     интерфейс не меняется);
@@ -35,9 +37,9 @@
 
 class MotionInterpolator;  // только указатель, полный тип — в .cpp
 
-// Масштабы (даташиты; сверены с исходниками либ):
+// Масштабы (даташиты):
 //   ADXL345: range 16g + full-res => 3.902 мг/LSB
-//   L3G4200D: enableDefault => 250 dps => 8.75 mdps/LSB, ODR 200 Гц
+//   L3G4200D: 250 dps => 8.75 mdps/LSB, ODR 200 Гц
 #define IMU_ACC_MG_LSB   3.902f
 #define IMU_GYRO_MDPS_LSB 8.75f
 
@@ -92,9 +94,8 @@ private:
     // Комплементарный фьюжн наклона (deg). Замена на EKF — только здесь.
     void imuFuse(float gxDps, float gyDps, float axMg, float ayMg, float azMg);
 
-    // --- Железо (либы живут здесь, наружу не торчат) ---
-    void *gyro_ = nullptr;  // L3G* (void чтобы не тащить L3G.h в заголовок)
-    void *acc_ = nullptr;   // ADXL345*
+    // --- Железо: только адреса, никаких объектов либ ---
+    uint8_t gyroAddr_ = 0;  // 0x68/0x69 (0 = нет гиро)
     bool hasGyro_ = false;
     bool hasAcc_ = false;
 

@@ -11,21 +11,19 @@
 
 /*
  * imu_logger.cpp — см. imu_logger.h.
- * API либ — один в один с их исходниками:
- *   L3G (pololu/l3g-arduino): init(device_4200D, sa0_auto) сам находит
- *     0x68/0x69 по WHO_AM_I==0xD3; enableDefault() => 250 dps
- *     (8.75 mdps/LSB), ODR 200 Гц; read() в g.x/y/z; setTimeout() bounds read.
- *   ADXL345 (sparkfun): адрес зашит 0x53; powerOn(); setRangeSetting(16);
- *     setFullResBit(true) => 3.902 мг/LSB (без него 10-бит, 31 мг/LSB!);
- *     set_bw(BW_200); readAccel(&x,&y,&z).
+ * Транспорт — голые регистры через Wire, без сторонних либ:
+ *   L3G4200D: WHO_AM_I 0x0F (=0xD3); CTRL_REG4 0x23 = 0x00 (250 dps);
+ *     CTRL_REG1 0x20 = 0x6F (ODR 200 Гц, все оси); чтение с OUT_X_L 0x28
+ *     + автоинкремент (бит 7); порядок LE.
+ *   ADXL345: DEVID 0x00 (=0xE5); POWER_CTL 0x2D: 0/16/8;
+ *     DATA_FORMAT 0x31 = 0x0B (full-res + 16g); BW_RATE 0x2C = 0x0C;
+ *     чтение с DATAX0 0x32 + multi-byte бит (0x40); порядок LE.
  */
 
 #include "imu_logger.h"
 #include <Arduino.h>
 #include <Wire.h>
 #include <math.h>
-#include <L3G.h>
-#include <SparkFun_ADXL345.h>
 #include "motion_interpolator.h"
 
 extern SemaphoreHandle_t i2cMutex;  // создаётся в main.cpp setup()
@@ -52,53 +50,89 @@ static void imuWriteReg(uint8_t addr, uint8_t reg, uint8_t val) {
     Wire.endTransmission();
 }
 
+// Чтение одного регистра (-1 при transact-ошибке).
+static int imuReadReg(uint8_t addr, uint8_t reg) {
+    Wire.beginTransmission(addr);
+    Wire.write(reg);
+    if (Wire.endTransmission(false) != 0) return -1;
+    if (Wire.requestFrom(addr, (uint8_t)1) != 1) return -1;
+    unsigned long t0 = millis();
+    while (!Wire.available()) {
+        if (millis() - t0 > 5) return -1;
+    }
+    return Wire.read();
+}
+
+// Пакетное чтение 3 осей LE (autoMask: 0x80 гиро / 0x40 аксель-MB).
+// false = шина/чип не ответили в срок (никаких unbounded циклов).
+static bool imuRead6(uint8_t addr, uint8_t reg, uint8_t autoMask,
+                     int16_t out[3]) {
+    Wire.beginTransmission(addr);
+    Wire.write(reg | autoMask);
+    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.requestFrom(addr, (uint8_t)6) != 6) {
+        while (Wire.available()) Wire.read();  // подчистить хвост
+        return false;
+    }
+    uint8_t b[6];
+    unsigned long t0 = millis();
+    for (int i = 0; i < 6; i++) {
+        while (!Wire.available()) {
+            if (millis() - t0 > 5) return false;
+        }
+        b[i] = Wire.read();
+    }
+    for (int i = 0; i < 3; i++) {
+        out[i] = (int16_t)((b[2 * i + 1] << 8) | b[2 * i]);
+    }
+    return true;
+}
+
 void ImuLogger::begin(uint8_t mask) {
-    // Wire уже поднят (servoCtrl.init). Вызывать из setup, задач ещё нет —
-    // мьютекс не нужен, но take/give с NULL-хендлом безопасны и здесь.
+    // Wire уже поднят (servoCtrl.init). Вызывать из setup, задач ещё нет.
     if (mask & 0x01) {
-        L3G *g = new L3G();
-        g->setTimeout(10);  // read() дольше 10 мс не висит никогда
-        if (g->init(L3G::device_4200D, L3G::sa0_auto)) {
-            g->enableDefault();
-            gyro_ = g;
+        // Гиро: ищем на 0x69/0x68 по WHO_AM_I, инитим парой записей.
+        uint8_t addr = 0;
+        if (imuReadReg(0x69, 0x0F) == 0xD3) addr = 0x69;
+        else if (imuReadReg(0x68, 0x0F) == 0xD3) addr = 0x68;
+        if (addr) {
+            imuWriteReg(addr, 0x23, 0x00);  // CTRL_REG4: 250 dps
+            imuWriteReg(addr, 0x20, 0x6F);  // CTRL_REG1: ODR 200 Гц, все оси
+            gyroAddr_ = addr;
             hasGyro_ = true;
             Serial.println("IMU: gyro L3G4200D OK");
         } else {
-            delete g;
             Serial.println("IMU: gyro not found (mask said present)");
         }
     }
     if (mask & 0x02) {
-        ADXL345 *a = new ADXL345();  // I2C, адрес 0x53 зашит в либе
-        // ВНИМАНИЕ: a->powerOn() НЕ зовём — внутри повторный Wire.begin(),
-        // который вешает уже поднятую шину (вис на загрузке после gyro OK).
-        // Инит регистрами напрямую (то же, что powerOn+настройки):
-        imuWriteReg(0x53, ADXL345_POWER_CTL, 0);  // wakeup
-        imuWriteReg(0x53, ADXL345_POWER_CTL, 16);  // auto-sleep
-        imuWriteReg(0x53, ADXL345_POWER_CTL, 8);  // measure
-        // DATA_FORMAT: FULL_RES(0x08) | range 16g(0x03) => 3.902 мг/LSB
-        imuWriteReg(0x53, ADXL345_DATA_FORMAT, 0x0B);
-        imuWriteReg(0x53, ADXL345_BW_RATE, ADXL345_BW_200);  // ODR 200 Гц
-        acc_ = a;
-        hasAcc_ = true;
-        Serial.println("IMU: acc ADXL345 OK (16g, full-res, 200Hz)");
+        // Аксель: DEVID обязан быть 0xE5, дальше те же 5 записей.
+        if (imuReadReg(0x53, 0x00) == 0xE5) {
+            imuWriteReg(0x53, 0x2D, 0);   // wakeup
+            imuWriteReg(0x53, 0x2D, 16);  // auto-sleep
+            imuWriteReg(0x53, 0x2D, 8);   // measure
+            // DATA_FORMAT: FULL_RES(0x08) | range 16g(0x03) => 3.902 мг/LSB
+            imuWriteReg(0x53, 0x31, 0x0B);
+            imuWriteReg(0x53, 0x2C, 0x0C);  // BW_RATE: ODR 200 Гц
+            hasAcc_ = true;
+            Serial.println("IMU: acc ADXL345 OK (16g, full-res, 200Hz)");
+        } else {
+            Serial.println("IMU: acc not found (mask said present)");
+        }
     }
 }
 
 void ImuLogger::calibrateGyro(uint16_t n) {
     if (!hasGyro_) return;
     // Рука стоит (CALIB поза home + отстойка — делает вызывающий код).
-    // Первые 20 сэмплов мимо: переходный после powerOn/enableDefault.
-    L3G *g = (L3G *)gyro_;
+    // Первые 20 сэмплов мимо: переходный после включения.
     long sx = 0, sy = 0, sz = 0;
+    int16_t v[3];
     for (uint16_t i = 0; i < (uint16_t)(n + 20); i++) {
-        if (!imuTake(100)) continue;
-        g->read();
-        bool to = g->timeoutOccurred();
-        imuGive();
-        if (to) continue;
+        bool ok = imuRead6(gyroAddr_, 0x28, 0x80, v);
+        if (!ok) { delay(IMU_PERIOD_MS); continue; }
         if (i < 20) { delay(IMU_PERIOD_MS); continue; }
-        sx += g->g.x; sy += g->g.y; sz += g->g.z;
+        sx += v[0]; sy += v[1]; sz += v[2];
         delay(IMU_PERIOD_MS);
     }
     biasGx_ = (float)sx / n;
@@ -133,15 +167,18 @@ void ImuLogger::push(const ImuSample &s) {
 
 // Переинит регистров после просадки/рыва шины (чип мог сброситься в дефолт).
 // Только прямые записи, никакого Wire.begin() — шиной владеет вызывающий
-// (держать i2cMutex!). L3G::enableDefault безопасен: одни writeReg.
+// (держать i2cMutex!).
 void ImuLogger::reinitChips() {
-    if (hasGyro_) ((L3G *)gyro_)->enableDefault();
+    if (hasGyro_) {
+        imuWriteReg(gyroAddr_, 0x23, 0x00);  // 250 dps
+        imuWriteReg(gyroAddr_, 0x20, 0x6F);  // ODR 200 Гц, все оси
+    }
     if (hasAcc_) {
-        imuWriteReg(0x53, ADXL345_POWER_CTL, 0);
-        imuWriteReg(0x53, ADXL345_POWER_CTL, 16);
-        imuWriteReg(0x53, ADXL345_POWER_CTL, 8);
-        imuWriteReg(0x53, ADXL345_DATA_FORMAT, 0x0B);
-        imuWriteReg(0x53, ADXL345_BW_RATE, ADXL345_BW_200);
+        imuWriteReg(0x53, 0x2D, 0);
+        imuWriteReg(0x53, 0x2D, 16);
+        imuWriteReg(0x53, 0x2D, 8);
+        imuWriteReg(0x53, 0x31, 0x0B);
+        imuWriteReg(0x53, 0x2C, 0x0C);
     }
 }
 
@@ -151,7 +188,7 @@ void ImuLogger::recoverBus() {
     Wire.end();
     delay(5);
     Wire.begin(21, 22);
-    Wire.setClock(100000);  // см. servo init: подтяжки 11к, только 100 кГц
+    Wire.setClock(400000);  // см. servo init: провода 5 см, голый транспорт
     Wire.setTimeout(20);
     reinitChips();
     busFails_ = 0;
@@ -182,25 +219,14 @@ void ImuLogger::poll() {
     if (!mv || hold_) return;
 
     if (!imuTake(50)) return;  // шина занята сервами — сэмпл пропускаем
-    int ax = 0, ay = 0, az = 0;
-    int16_t gx = 0, gy = 0, gz = 0;
+    int16_t axyz[3] = {0, 0, 0};
+    int16_t gxyz[3] = {0, 0, 0};
     bool burstOk = true;
     if (hasAcc_) {
-        int x, y, z;
-        ADXL345 *a = (ADXL345 *)acc_;
-        // status/error_code у либы залипающие — сбрасываем перед чтением,
-        // иначе один дребезг контакта вечно считается аварией.
-        a->status = ADXL345_OK;
-        a->error_code = ADXL345_NO_ERROR;
-        a->readAccel(&x, &y, &z);
-        if (a->status != ADXL345_OK) burstOk = false;
-        else { ax = x; ay = y; az = z; }
+        if (!imuRead6(0x53, 0x32, 0x40, axyz)) burstOk = false;
     }
     if (hasGyro_) {
-        L3G *g = (L3G *)gyro_;
-        g->read();
-        if (g->timeoutOccurred()) burstOk = false;
-        else { gx = g->g.x; gy = g->g.y; gz = g->g.z; }
+        if (!imuRead6(gyroAddr_, 0x28, 0x80, gxyz)) burstOk = false;
     }
     if ((hasGyro_ || hasAcc_) && !burstOk) {
         // Дребезг Dupont / просадка: чиним сами, молча до 100 подряд.
@@ -212,17 +238,17 @@ void ImuLogger::poll() {
 
     ImuSample s;
     s.t = now;
-    s.ax = (int16_t)ax; s.ay = (int16_t)ay; s.az = (int16_t)az;
-    s.gx = gx; s.gy = gy; s.gz = gz;
+    s.ax = axyz[0]; s.ay = axyz[1]; s.az = axyz[2];
+    s.gx = gxyz[0]; s.gy = gxyz[1]; s.gz = gxyz[2];
     last_[0] = s.ax; last_[1] = s.ay; last_[2] = s.az;
     last_[3] = s.gx; last_[4] = s.gy; last_[5] = s.gz;
 
     // Фьюжн + пики (float, 200 Гц — ESP32 не замечает).
-    float axMg = ax * IMU_ACC_MG_LSB;
-    float ayMg = ay * IMU_ACC_MG_LSB;
-    float azMg = az * IMU_ACC_MG_LSB;
-    float gxDps = (gx - biasGx_) * IMU_GYRO_MDPS_LSB / 1000.0f;
-    float gyDps = (gy - biasGy_) * IMU_GYRO_MDPS_LSB / 1000.0f;
+    float axMg = axyz[0] * IMU_ACC_MG_LSB;
+    float ayMg = axyz[1] * IMU_ACC_MG_LSB;
+    float azMg = axyz[2] * IMU_ACC_MG_LSB;
+    float gxDps = (gxyz[0] - biasGx_) * IMU_GYRO_MDPS_LSB / 1000.0f;
+    float gyDps = (gxyz[1] - biasGy_) * IMU_GYRO_MDPS_LSB / 1000.0f;
     imuFuse(gxDps, gyDps, axMg, ayMg, azMg);
     float accG = sqrtf(axMg * axMg + ayMg * ayMg + azMg * azMg) / 1000.0f;
     if (accG > peakAccG_) peakAccG_ = accG;
