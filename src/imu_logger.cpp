@@ -206,12 +206,23 @@ void ImuLogger::poll() {
     // и запись не рвут.
     bool mv = interp_ && interp_->isMoving();
     uint32_t now = millis();
-    if (mv && (!wasMoving_ && (now - lastEndMs_ > IMU_IDLE_GAP_MS))) {
-        head_ = 0;
-        count_ = 0;
-        peakAccG_ = 0;
-        peakJerkGS_ = 0;
-        prevAccValid_ = false;
+    if (mv && !wasMoving_) {
+        if (now - lastEndMs_ > IMU_IDLE_GAP_MS) {
+            // Новая команда: сброс кольца, первый сэмпл с меткой старта.
+            head_ = 0;
+            count_ = 0;
+            marks_ = 0;
+            peakAccG_ = 0;
+            peakJerkGS_ = 0;
+            prevAccValid_ = false;
+            pendingMark_ = true;
+            pendingIsStart_ = true;
+        } else {
+            // Хоп вейпоинта внутри одного G0 (пауза миллисекунды):
+            // кольцо не рвём, следующий сэмпл метим.
+            pendingMark_ = true;
+            pendingIsStart_ = false;
+        }
     }
     recording_ = mv;
     if (!mv && wasMoving_) lastEndMs_ = now;
@@ -240,6 +251,12 @@ void ImuLogger::poll() {
     s.t = now;
     s.ax = axyz[0]; s.ay = axyz[1]; s.az = axyz[2];
     s.gx = gxyz[0]; s.gy = gxyz[1]; s.gz = gxyz[2];
+    s.flags = 0;
+    if (pendingMark_) {
+        s.flags = pendingIsStart_ ? 0x01 : 0x02;
+        marks_++;
+        pendingMark_ = false;
+    }
     last_[0] = s.ax; last_[1] = s.ay; last_[2] = s.az;
     last_[3] = s.gx; last_[4] = s.gy; last_[5] = s.gz;
 
@@ -323,10 +340,11 @@ void ImuLogger::dump(uint8_t decim) {
     uint32_t start = (head_ >= n) ? (head_ - n) : 0;
     for (uint32_t i = 0; i < n; i += decim) {
         const ImuSample &s = ring_[(start + i) % IMU_LOG_N];
-        Serial.printf("#IMU t=%lu ax=%d ay=%d az=%d gx=%d gy=%d gz=%d\n",
+        Serial.printf("#IMU t=%lu ax=%d ay=%d az=%d gx=%d gy=%d gz=%d f=%u\n",
                       (unsigned long)s.t,
                       (int)s.ax, (int)s.ay, (int)s.az,
-                      (int)s.gx, (int)s.gy, (int)s.gz);
+                      (int)s.gx, (int)s.gy, (int)s.gz,
+                      (unsigned)s.flags);
     }
     Serial.println("OK");
 }

@@ -52,7 +52,8 @@ struct ImuSample {
     uint32_t t;                       // millis() взятия
     int16_t  ax, ay, az;              // аксель, counts
     int16_t  gx, gy, gz;              // гиро, counts (bias НЕ вычтен — вычитает хост)
-};  // ровно 16 байт
+    uint16_t flags;                   // бит0 = старт записи, бит1 = хоп вейпоинта
+};  // 18 байт (было 16 — метки того стоят)
 
 class ImuLogger {
 public:
@@ -79,6 +80,7 @@ public:
     void getPeaks(float &accG, float &jerkGS) const;
     uint32_t sampleCount() const;
     bool isRecording() const;
+    uint32_t markCount() const { return marks_; }
     void setHold(bool h);  // заморозить запись на время DUMP (рвёт tearing)
     void dump(uint8_t decim);  // печать кольца в Serial, старое → новое
     uint32_t busFails() const { return busFails_; }
@@ -115,6 +117,9 @@ private:
     volatile uint32_t count_ = 0;   // сколько валидных (<= N)
     volatile bool recording_ = false;
     volatile bool hold_ = false;
+    volatile uint32_t marks_ = 0;  // меток в текущей записи
     bool wasMoving_ = false;
+    bool pendingMark_ = false;  // следующий сэмпл пометить хопом
+    bool pendingIsStart_ = true;  // true = метка старта (бит0), false = вейпоинт (бит1)
     uint32_t lastEndMs_ = 0;
 };

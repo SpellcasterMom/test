@@ -1037,8 +1037,9 @@ void handleM119(GCodeCommand &cmd) {
         Serial.printf("IMU: last ax=%d ay=%d az=%d gx=%d gy=%d gz=%d\n",
                       last[0], last[1], last[2], last[3], last[4], last[5]);
         Serial.printf("IMU: bias dps gx=%.2f gy=%.2f gz=%.2f\n", bx, by, bz);
-        Serial.printf("IMU: peak acc=%.2fg jerk=%.1fg/s log n=%lu rec=%d\n",
+        Serial.printf("IMU: peak acc=%.2fg jerk=%.1fg/s log n=%lu marks=%lu rec=%d\n",
                       pkA, pkJ, (unsigned long)imuLogger.sampleCount(),
+                      (unsigned long)imuLogger.markCount(),
                       imuLogger.isRecording() ? 1 : 0);
         Serial.printf("IMU: bus fails=%lu recovers=%lu\n",
                       (unsigned long)imuLogger.busFails(),
