@@ -1,0 +1,411 @@
+# preset=tilt r=100.0 center=(230.0,0.0,300.0)
+>> G90
+<< OK
+>> G1 X294 Y-76 Z313 A100.0 B-10.0 C90.0 F300
+> M115
+=== KIN-DIAG ===
+CMD: G1 X294 Y-76 Z313 A100.
+KIND: IK-CART FEED: 300 SAFETY: ON FINGER: 105.0 MODE: ABS FW:1.5
+STRAT: 3 INTERP: CART steps=92 timeMs=1851
+TARGET TCP: X=294.0 Y=-76.0 Z=313.0 A=100.0 B=-10.0 C=90.0
+TARGET wrist: X=190.6 Y=-79.2 Z=331.0 toolDir: 0.985 0.030 -0.171
+SOLS: 3
+[0] q: P1=-38.9 P2=-13.6 P3=-83.3 P4=84.2 P5=39.8 P6=1.9
+    TCP: X=293.8 Y=-76.0 Z=312.8 dPos=0.3mm dOri=0.1deg
+    SAFE:OK CLAMP:- minZ=275 NLS:ok/8it dq0=0.490 n1=165.1
+[1] q: P1=-38.9 P2=-95.4 P3=83.1 P4=-0.7 P5=39.9 P6=1.7
+    TCP: X=293.9 Y=-76.0 Z=313.0 dPos=0.1mm dOri=0.1deg
+    SAFE:OK CLAMP:- minZ=118 NLS:ok/11it dq0=0.490 n1=191.2
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=127.9 Y=-103.1 Z=118.4
+  J3: X=154.7 Y=-124.8 Z=275.6
+  J4: X=154.7 Y=-124.8 Z=275.6
+  J5: X=164.0 Y=-80.0 Z=335.9
+  J6: X=190.5 Y=-79.2 Z=331.2
+[2] q: P1=-38.9 P2=-95.6 P3=83.4 P4=-0.7 P5=39.9 P6=1.8
+    TCP: X=293.5 Y=-75.6 Z=312.7 dPos=0.7mm dOri=0.0deg
+    SAFE:OK CLAMP:- minZ=118 NLS:ok/10it dq0=0.489 n1=249.4
+CHOSEN: [1] (cart-tracked)
+ACTUAL q: P1=-38.9 P2=-95.3 P3=83.1 P4=-0.9 P5=39.9 P6=1.8 P7=0.0
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=127.9 Y=-103.1 Z=118.7
+  J3: X=154.4 Y=-124.4 Z=276.1
+  J4: X=154.4 Y=-124.4 Z=276.1
+  J5: X=163.7 Y=-79.7 Z=336.4
+  J6: X=190.3 Y=-78.9 Z=331.7
+  DIR: X=0.984 Y=0.030 Z=-0.174
+  TCP: X=293.7 Y=-75.7 Z=313.4
+RESIDUAL: dX=-0.3 dY=0.3 dZ=0.4 dist=0.6mm dOri=0.2deg
+>> G1 X273 Y-87 Z325 A100.0 B-10.0 C90.0 F300
+> M115
+=== KIN-DIAG ===
+CMD: G1 X273 Y-87 Z325 A100.
+KIND: IK-CART FEED: 300 SAFETY: ON FINGER: 105.0 MODE: ABS FW:1.5
+STRAT: 3 INTERP: CART steps=6 timeMs=137
+TARGET TCP: X=273.0 Y=-87.0 Z=325.0 A=100.0 B=-10.0 C=90.0
+TARGET wrist: X=169.6 Y=-90.2 Z=343.0 toolDir: 0.985 0.030 -0.171
+SOLS: 3
+[0] q: P1=-45.0 P2=-9.9 P3=-84.0 P4=79.8 P5=45.8 P6=-0.0
+    TCP: X=272.9 Y=-87.0 Z=325.0 dPos=0.1mm dOri=0.1deg
+    SAFE:OK CLAMP:- minZ=286 NLS:ok/33it dq0=0.447 n1=257.1
+[1] q: P1=-45.1 P2=-92.6 P3=84.0 P4=-5.2 P5=45.8 P6=0.3
+    TCP: X=272.7 Y=-87.1 Z=325.3 dPos=0.4mm dOri=0.3deg
+    SAFE:OK CLAMP:- minZ=127 NLS:ok/24it dq0=0.490 n1=277.7
+[2] q: P1=-45.0 P2=-92.6 P3=84.1 P4=-5.8 P5=45.9 P6=-0.2
+    TCP: X=272.8 Y=-86.8 Z=324.9 dPos=0.3mm dOri=0.0deg
+    SAFE:OK CLAMP:- minZ=127 NLS:ok/10it dq0=0.489 n1=238.2
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=116.5 Y=-116.6 Z=126.6
+  J3: X=133.3 Y=-133.5 Z=285.8
+  J4: X=133.3 Y=-133.5 Z=285.8
+  J5: X=142.8 Y=-90.8 Z=347.5
+  J6: X=169.4 Y=-90.0 Z=342.9
+CHOSEN: [2] (cart-tracked)
+ACTUAL q: P1=-45.0 P2=-92.5 P3=83.9 P4=-5.6 P5=45.9 P6=-0.2 P7=0.0
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=116.5 Y=-116.6 Z=126.7
+  J3: X=133.6 Y=-133.8 Z=285.9
+  J4: X=133.6 Y=-133.8 Z=285.9
+  J5: X=143.0 Y=-91.0 Z=347.6
+  J6: X=169.6 Y=-90.2 Z=343.0
+  DIR: X=0.985 Y=0.030 Z=-0.171
+  TCP: X=273.0 Y=-87.0 Z=325.0
+RESIDUAL: dX=-0.0 dY=-0.0 dZ=0.0 dist=0.0mm dOri=0.0deg
+>> G1 X250 Y-91 Z335 A100.0 B-10.0 C90.0 F300
+> M115
+=== KIN-DIAG ===
+CMD: G1 X250 Y-91 Z335 A100.
+KIND: IK-CART FEED: 300 SAFETY: ON FINGER: 105.0 MODE: ABS FW:1.5
+STRAT: 3 INTERP: CART steps=6 timeMs=128
+TARGET TCP: X=250.0 Y=-91.0 Z=335.0 A=100.0 B=-10.0 C=90.0
+TARGET wrist: X=146.6 Y=-94.2 Z=353.0 toolDir: 0.985 0.030 -0.171
+SOLS: 3
+[0] q: P1=-50.8 P2=-4.7 P3=-86.8 P4=75.6 P5=51.4 P6=-2.4
+    TCP: X=249.9 Y=-91.0 Z=334.9 dPos=0.1mm dOri=0.1deg
+    SAFE:OK CLAMP:- minZ=294 NLS:ok/45it dq0=0.400 n1=258.0
+[1] q: P1=-50.8 P2=-90.2 P3=86.9 P4=-12.5 P5=51.3 P6=-2.3
+    TCP: X=249.9 Y=-91.1 Z=335.0 dPos=0.2mm dOri=0.2deg
+    SAFE:OK CLAMP:- minZ=134 NLS:ok/30it dq0=0.490 n1=341.4
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=104.2 Y=-127.9 Z=133.5
+  J3: X=110.0 Y=-135.0 Z=294.3
+  J4: X=110.0 Y=-135.0 Z=294.3
+  J5: X=119.8 Y=-94.7 Z=357.5
+  J6: X=146.4 Y=-93.9 Z=352.9
+[2] q: P1=-50.8 P2=-90.2 P3=87.0 P4=-12.6 P5=51.5 P6=-2.4
+    TCP: X=249.8 Y=-90.7 Z=334.8 dPos=0.4mm dOri=0.0deg
+    SAFE:OK CLAMP:- minZ=133 NLS:ok/11it dq0=0.488 n1=225.4
+CHOSEN: [1] (cart-tracked)
+ACTUAL q: P1=-50.8 P2=-90.2 P3=86.8 P4=-12.4 P5=51.4 P6=-2.3 P7=0.0
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=104.3 Y=-127.9 Z=133.4
+  J3: X=110.3 Y=-135.3 Z=294.1
+  J4: X=110.3 Y=-135.3 Z=294.1
+  J5: X=120.0 Y=-94.8 Z=357.4
+  J6: X=146.6 Y=-94.1 Z=352.8
+  DIR: X=0.985 Y=0.029 Z=-0.169
+  TCP: X=250.0 Y=-91.0 Z=335.0
+RESIDUAL: dX=0.0 dY=0.0 dZ=0.0 dist=0.0mm dOri=0.1deg
+>> G1 X225 Y-90 Z343 A100.0 B-10.0 C90.0 F300
+> M115
+=== KIN-DIAG ===
+CMD: G1 X225 Y-90 Z343 A100.
+KIND: IK-CART FEED: 300 SAFETY: ON FINGER: 105.0 MODE: ABS FW:1.5
+STRAT: 3 INTERP: CART steps=6 timeMs=139
+TARGET TCP: X=225.0 Y=-90.0 Z=343.0 A=100.0 B=-10.0 C=90.0
+TARGET wrist: X=121.6 Y=-93.2 Z=361.0 toolDir: 0.985 0.030 -0.171
+SOLS: 3
+[0] q: P1=-57.0 P2=1.9 P3=-91.4 P4=71.2 P5=57.3 P6=-5.5
+    TCP: X=224.9 Y=-90.0 Z=343.0 dPos=0.1mm dOri=0.1deg
+    SAFE:OK CLAMP:- minZ=299 NLS:ok/48it dq0=0.447 n1=275.5
+[1] q: P1=-57.0 P2=-88.1 P3=91.4 P4=-21.7 P5=57.4 P6=-5.5
+    TCP: X=225.0 Y=-90.0 Z=343.0 dPos=0.0mm dOri=0.1deg
+    SAFE:OK CLAMP:- minZ=139 NLS:ok/30it dq0=0.490 n1=286.5
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=89.8 Y=-138.3 Z=139.4
+  J3: X=84.8 Y=-130.6 Z=300.2
+  J4: X=84.8 Y=-130.6 Z=300.2
+  J5: X=95.0 Y=-93.8 Z=365.5
+  J6: X=121.6 Y=-93.1 Z=360.9
+[2] q: P1=-57.0 P2=-88.1 P3=91.5 P4=-21.8 P5=57.4 P6=-5.6
+    TCP: X=224.9 Y=-89.9 Z=342.9 dPos=0.2mm dOri=0.0deg
+    SAFE:OK CLAMP:- minZ=139 NLS:ok/10it dq0=0.488 n1=212.0
+CHOSEN: [1] (cart-tracked)
+ACTUAL q: P1=-57.0 P2=-88.2 P3=91.4 P4=-21.2 P5=57.3 P6=-5.2 P7=0.0
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=89.8 Y=-138.3 Z=139.1
+  J3: X=84.9 Y=-130.8 Z=299.9
+  J4: X=84.9 Y=-130.8 Z=299.9
+  J5: X=94.9 Y=-93.7 Z=365.0
+  J6: X=121.5 Y=-92.9 Z=360.5
+  DIR: X=0.986 Y=0.028 Z=-0.167
+  TCP: X=225.0 Y=-90.0 Z=343.0
+RESIDUAL: dX=0.0 dY=0.0 dZ=-0.0 dist=0.0mm dOri=0.3deg
+>> G1 X200 Y-83 Z348 A100.0 B-20.0 C90.0 F300
+> M115
+=== KIN-DIAG ===
+CMD: G1 X200 Y-83 Z348 A100.
+KIND: IK-CART FEED: 300 SAFETY: ON FINGER: 105.0 MODE: ABS FW:1.5
+STRAT: 3 INTERP: CART steps=7 timeMs=145
+TARGET TCP: X=200.0 Y=-83.0 Z=348.0 A=100.0 B=-20.0 C=90.0
+TARGET wrist: X=96.6 Y=-89.2 Z=365.1 toolDir: 0.985 0.059 -0.163
+SOLS: 3
+[0] q: P1=-63.5 P2=8.6 P3=-97.3 P4=66.4 P5=65.2 P6=-0.1
+    TCP: X=200.0 Y=-83.0 Z=348.0 dPos=0.0mm dOri=0.3deg
+    SAFE:OK CLAMP:- minZ=297 NLS:ok/42it dq0=0.400 n1=296.2
+[1] q: P1=-63.5 P2=-86.9 P3=97.4 P4=-33.6 P5=65.2 P6=-0.8
+    TCP: X=200.0 Y=-83.0 Z=348.0 dPos=0.0mm dOri=0.1deg
+    SAFE:OK CLAMP:- minZ=143 NLS:ok/57it dq0=0.490 n1=325.4
+[2] q: P1=-63.5 P2=-87.1 P3=97.6 P4=-33.4 P5=65.2 P6=-0.7
+    TCP: X=199.8 Y=-82.7 Z=347.7 dPos=0.5mm dOri=0.0deg
+    SAFE:OK CLAMP:- minZ=142 NLS:ok/10it dq0=0.490 n1=198.7
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=73.4 Y=-147.5 Z=142.4
+  J3: X=60.4 Y=-121.3 Z=300.7
+  J4: X=60.4 Y=-121.3 Z=300.7
+  J5: X=69.8 Y=-90.5 Z=369.2
+  J6: X=96.4 Y=-88.9 Z=364.8
+CHOSEN: [2] (cart-tracked)
+ACTUAL q: P1=-63.5 P2=-87.0 P3=97.3 P4=-33.3 P5=65.2 P6=-0.7 P7=0.0
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=73.4 Y=-147.5 Z=142.7
+  J3: X=60.5 Y=-121.6 Z=301.1
+  J4: X=60.5 Y=-121.6 Z=301.1
+  J5: X=70.0 Y=-90.8 Z=369.5
+  J6: X=96.6 Y=-89.2 Z=365.1
+  DIR: X=0.985 Y=0.059 Z=-0.163
+  TCP: X=200.0 Y=-83.0 Z=348.0
+RESIDUAL: dX=0.0 dY=0.0 dZ=0.0 dist=0.0mm dOri=0.0deg
+>> G1 X178 Y-69 Z350 A95.0 B-20.0 C90.0 F300
+> M115
+=== KIN-DIAG ===
+CMD: G1 X178 Y-69 Z350 A95.0
+KIND: IK-CART FEED: 300 SAFETY: ON FINGER: 105.0 MODE: ABS FW:1.5
+STRAT: 3 INTERP: CART steps=6 timeMs=139
+TARGET TCP: X=178.0 Y=-69.0 Z=350.0 A=95.0 B=-20.0 C=90.0
+TARGET wrist: X=73.4 Y=-72.1 Z=358.6 toolDir: 0.996 0.030 -0.082
+SOLS: 3
+[0] q: P1=-69.4 P2=14.7 P3=-103.8 P4=74.4 P5=70.5 P6=6.2
+    TCP: X=177.7 Y=-69.1 Z=349.8 dPos=0.3mm dOri=0.2deg
+    SAFE:OK CLAMP:- minZ=294 NLS:ok/45it dq0=0.447 n1=308.2
+[1] q: P1=-69.3 P2=-87.2 P3=103.8 P4=-31.5 P5=70.4 P6=5.9
+    TCP: X=178.0 Y=-69.0 Z=349.9 dPos=0.1mm dOri=0.3deg
+    SAFE:OK CLAMP:- minZ=142 NLS:ok/45it dq0=0.447 n1=316.6
+[2] q: P1=-69.3 P2=-87.5 P3=103.7 P4=-30.3 P5=70.5 P6=6.6
+    TCP: X=178.0 Y=-69.0 Z=349.7 dPos=0.3mm dOri=0.0deg
+    SAFE:OK CLAMP:- minZ=141 NLS:ok/28it dq0=0.490 n1=177.5
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=58.2 Y=-154.2 Z=141.3
+  J3: X=42.4 Y=-112.2 Z=295.9
+  J4: X=42.4 Y=-112.2 Z=295.9
+  J5: X=46.5 Y=-72.9 Z=360.4
+  J6: X=73.4 Y=-72.1 Z=358.2
+CHOSEN: [2] (cart-tracked)
+ACTUAL q: P1=-69.3 P2=-87.3 P3=103.6 P4=-30.5 P5=70.5 P6=6.6 P7=0.0
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=58.3 Y=-154.2 Z=141.6
+  J3: X=42.3 Y=-112.0 Z=296.2
+  J4: X=42.3 Y=-112.0 Z=296.2
+  J5: X=46.5 Y=-73.0 Z=360.9
+  J6: X=73.4 Y=-72.1 Z=358.6
+  DIR: X=0.996 Y=0.030 Z=-0.082
+  TCP: X=178.0 Y=-69.0 Z=350.0
+RESIDUAL: dX=0.0 dY=0.0 dZ=-0.0 dist=0.0mm dOri=0.0deg
+>> G1 X159 Y-51 Z348 A95.0 B-20.0 C90.0 F300
+> M115
+=== KIN-DIAG ===
+CMD: G1 X159 Y-51 Z348 A95.0
+KIND: IK-CART FEED: 300 SAFETY: ON FINGER: 105.0 MODE: ABS FW:1.5
+STRAT: 3 INTERP: CART steps=10 timeMs=206
+TARGET TCP: X=159.0 Y=-51.0 Z=348.0 A=95.0 B=-20.0 C=90.0
+TARGET wrist: X=54.4 Y=-54.1 Z=356.6 toolDir: 0.996 0.030 -0.082
+SOLS: 3
+[0] q: P1=-75.3 P2=25.3 P3=-112.7 P4=67.6 P5=76.2 P6=1.2
+    TCP: X=159.0 Y=-51.0 Z=348.0 dPos=0.0mm dOri=0.1deg
+    SAFE:OK CLAMP:- minZ=283 NLS:ok/9it dq0=0.434 n1=140.6
+[1] q: P1=-75.3 P2=-85.7 P3=112.9 P4=-46.5 P5=76.3 P6=1.2
+    TCP: X=159.0 Y=-51.1 Z=347.2 dPos=0.8mm dOri=0.2deg
+    SAFE:OK CLAMP:- minZ=146 NLS:ok/14it dq0=0.387 n1=16.8
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=41.8 Y=-159.1 Z=146.3
+  J3: X=23.2 Y=-88.1 Z=289.6
+  J4: X=23.2 Y=-88.1 Z=289.6
+  J5: X=27.5 Y=-55.2 Z=357.6
+  J6: X=54.4 Y=-54.4 Z=355.5
+[2] q: P1=-75.3 P2=-85.2 P3=113.3 P4=-49.6 P5=76.2 P6=-0.8
+    TCP: X=159.0 Y=-51.0 Z=347.5 dPos=0.5mm dOri=0.3deg
+    SAFE:OK CLAMP:- minZ=148 NLS:ok/25it dq0=0.490 n1=168.6
+CHOSEN: [1] (cart-tracked)
+ACTUAL q: P1=-75.1 P2=-85.5 P3=112.5 P4=-46.4 P5=76.1 P6=1.3 P7=0.0
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=42.2 Y=-159.0 Z=147.1
+  J3: X=23.5 Y=-88.3 Z=290.5
+  J4: X=23.5 Y=-88.3 Z=290.5
+  J5: X=27.9 Y=-55.4 Z=358.5
+  J6: X=54.8 Y=-54.6 Z=356.4
+  DIR: X=0.996 Y=0.031 Z=-0.080
+  TCP: X=159.4 Y=-51.4 Z=348.0
+RESIDUAL: dX=0.4 dY=-0.4 dZ=0.0 dist=0.5mm dOri=0.1deg
+>> G1 X145 Y-30 Z343 A90.0 B-20.0 C90.0 F300
+> M115
+=== KIN-DIAG ===
+CMD: G1 X145 Y-30 Z343 A90.0
+KIND: IK-CART FEED: 300 SAFETY: ON FINGER: 105.0 MODE: ABS FW:1.5
+STRAT: 3 INTERP: CART steps=6 timeMs=132
+TARGET TCP: X=145.0 Y=-30.0 Z=343.0 A=90.0 B=-20.0 C=90.0
+TARGET wrist: X=40.0 Y=-30.0 Z=343.0 toolDir: 1.000 -0.000 0.000
+SOLS: 3
+[0] q: P1=-81.1 P2=27.7 P3=-114.6 P4=86.8 P5=81.1 P6=20.0
+    TCP: X=145.0 Y=-30.0 Z=343.0 dPos=0.0mm dOri=0.0deg
+    SAFE:OK CLAMP:- minZ=280 NLS:ok/13it dq0=0.464 n1=100.9
+[1] q: P1=-81.1 P2=-84.9 P3=114.6 P4=-29.4 P5=81.1 P6=20.3
+    TCP: X=145.1 Y=-30.3 Z=342.4 dPos=0.7mm dOri=0.1deg
+    SAFE:OK CLAMP:- minZ=149 NLS:ok/14it dq0=0.323 n1=4.8
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=25.5 Y=-162.4 Z=148.7
+  J3: X=13.1 Y=-83.7 Z=288.6
+  J4: X=13.1 Y=-83.7 Z=288.6
+  J5: X=13.1 Y=-30.4 Z=342.3
+  J6: X=40.1 Y=-30.4 Z=342.3
+[2] q: P1=-81.1 P2=-84.7 P3=116.8 P4=-37.8 P5=81.1 P6=14.3
+    TCP: X=145.0 Y=-30.2 Z=342.6 dPos=0.5mm dOri=0.9deg
+    SAFE:OK CLAMP:- minZ=149 NLS:ok/37it dq0=0.457 n1=157.4
+CHOSEN: [1] (cart-tracked)
+ACTUAL q: P1=-81.1 P2=-84.7 P3=115.1 P4=-31.8 P5=81.1 P6=18.6 P7=0.0
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=25.5 Y=-162.3 Z=149.3
+  J3: X=12.9 Y=-81.9 Z=288.2
+  J4: X=12.9 Y=-81.9 Z=288.2
+  J5: X=13.0 Y=-30.2 Z=343.5
+  J6: X=40.0 Y=-30.2 Z=343.4
+  DIR: X=1.000 Y=0.001 Z=-0.004
+  TCP: X=145.0 Y=-30.0 Z=343.0
+RESIDUAL: dX=0.0 dY=-0.0 dZ=-0.0 dist=0.0mm dOri=0.2deg
+>> G1 X137 Y-7 Z335 A90.0 B-20.0 C90.0 F300
+> M115
+=== KIN-DIAG ===
+CMD: G1 X137 Y-7 Z335 A90.0 
+KIND: IK-CART FEED: 300 SAFETY: ON FINGER: 105.0 MODE: ABS FW:1.5
+STRAT: 3 INTERP: CART steps=7 timeMs=144
+TARGET TCP: X=137.0 Y=-7.0 Z=335.0 A=90.0 B=-20.0 C=90.0
+TARGET wrist: X=32.0 Y=-7.0 Z=335.0 toolDir: 1.000 -0.000 0.000
+SOLS: 3
+[0] q: P1=-85.3 P2=37.2 P3=-121.6 P4=84.6 P5=85.2 P6=20.2
+    TCP: X=137.0 Y=-7.0 Z=335.0 dPos=0.0mm dOri=0.0deg
+    SAFE:OK CLAMP:- minZ=265 NLS:ok/9it dq0=0.490 n1=72.2
+[1] q: P1=-85.3 P2=-81.4 P3=116.2 P4=-22.6 P5=85.4 P6=32.2
+    TCP: X=136.9 Y=-7.3 Z=334.7 dPos=0.4mm dOri=1.0deg
+    SAFE:OK CLAMP:- minZ=159 NLS:ok/20it dq0=0.447 n1=40.1
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=13.4 Y=-162.6 Z=158.7
+  J3: X=5.9 Y=-70.9 Z=290.8
+  J4: X=5.9 Y=-70.9 Z=290.8
+  J5: X=4.9 Y=-7.8 Z=332.4
+  J6: X=31.9 Y=-7.7 Z=332.9
+[2] q: P1=94.5 P2=-37.8 P3=125.1 P4=-76.4 P5=-90.0 P6=9.1
+    TCP: X=133.0 Y=-7.3 Z=335.0 dPos=4.0mm dOri=4.5deg
+    SAFE:OK CLAMP:P5  minZ=264 NLS:fail/97it seed=188.9mm/20.0deg dq0=0.452 n1=158.6
+CHOSEN: [1] (cart-tracked)
+ACTUAL q: P1=-85.2 P2=-81.9 P3=121.7 P4=-40.0 P5=85.2 P6=19.8 P7=0.0
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=13.6 Y=-162.8 Z=157.4
+  J3: X=5.0 Y=-59.9 Z=280.9
+  J4: X=5.0 Y=-59.9 Z=280.9
+  J5: X=5.0 Y=-7.0 Z=335.0
+  J6: X=32.0 Y=-7.0 Z=335.0
+  DIR: X=1.000 Y=0.000 Z=-0.000
+  TCP: X=137.0 Y=-7.0 Z=335.0
+RESIDUAL: dX=0.0 dY=-0.0 dZ=-0.0 dist=0.0mm dOri=0.0deg
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0030,len:1184
+load:0x40078000,len:13232
+load:0x40080400,len:3028
+entry 0x400805e4
+>> G1 X135 Y17 Z325 A90.0 B-10.0 C90.0 F300
+
+>> G1 X139 Y40 Z313 A90.0 B-20.0 C90.0 F300
+> M115
+=== KIN-DIAG ===
+CMD: G1 X135 Y17 Z325 A90.0 
+KIND: IK-CART FEED: 300 SAFETY: ON FINGER: 105.0 MODE: ABS FW:1.5
+STRAT: 3 INTERP: CART steps=135 timeMs=2716
+TARGET TCP: X=135.0 Y=17.0 Z=325.0 A=90.0 B=-10.0 C=90.0
+TARGET wrist: X=30.0 Y=17.0 Z=325.0 toolDir: 1.000 -0.000 0.000
+SOLS: 3
+[0] q: P1=-85.2 P2=48.0 P3=-128.5 P4=80.5 P5=85.2 P6=10.0
+    TCP: X=135.0 Y=17.0 Z=325.0 dPos=0.0mm dOri=0.0deg
+    SAFE:OK CLAMP:- minZ=244 NLS:ok/11it dq0=0.447 n1=132.4
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=-10.2 Y=122.2 Z=244.4
+  J3: X=3.0 Y=-36.0 Z=271.0
+  J4: X=3.0 Y=-36.0 Z=271.0
+  J5: X=3.0 Y=17.0 Z=325.0
+  J6: X=30.0 Y=17.0 Z=325.0
+[1] q: P1=-85.5 P2=-78.2 P3=124.0 P4=-34.7 P5=85.4 P6=21.2
+    TCP: X=134.9 Y=16.6 Z=324.7 dPos=0.5mm dOri=0.9deg
+    SAFE:OK CLAMP:- minZ=168 NLS:ok/26it dq0=0.490 n1=115.5
+[2] q: P1=87.0 P2=-54.4 P3=131.7 P4=-71.0 P5=-90.0 P6=3.8
+    TCP: X=133.1 Y=17.1 Z=325.0 dPos=1.9mm dOri=3.0deg
+    SAFE:OK CLAMP:P5  minZ=230 NLS:fail/87it seed=192.4mm/10.0deg dq0=0.438 n1=165.1
+CHOSEN: [0] (cart-tracked)
+ACTUAL q: P1=87.0 P2=68.3 P3=-107.6 P4=-2.2 P5=-90.0 P6=51.4 P7=0.0
+  J0: X=0.0 Y=0.0 Z=0.0
+  J1: X=0.0 Y=0.0 Z=134.0
+  J2: X=-7.9 Y=-153.1 Z=194.9
+  J3: X=-2.7 Y=-51.5 Z=319.6
+  J4: X=-2.7 Y=-51.5 Z=319.6
+  J5: X=1.2 Y=23.9 Z=325.0
+  J6: X=28.2 Y=22.5 Z=325.0
+  DIR: X=0.999 Y=-0.052 Z=-0.000
+  TCP: X=133.1 Y=17.1 Z=325.0
+RESIDUAL: dX=-1.9 dY=0.1 dZ=-0.0 dist=1.9mm dOri=3.0deg
+>> G1 X150 Y60 Z300 A100.0 B-10.0 C90.0 F300
+<< ERROR: Cartesian move failed (see M115 INTERP)
+>> G1 X166 Y76 Z287 A100.0 B-20.0 C90.0 F300
+<< ERROR: Cartesian move failed (see M115 INTERP)
+>> G1 X187 Y87 Z275 A100.0 B-20.0 C90.0 F300
+<< ERROR: Cartesian move failed (see M115 INTERP)
+>> G1 X210 Y91 Z265 A100.0 B10.0 C90.0 F300
+<< ERROR: Cartesian move failed (see M115 INTERP)
+>> G1 X235 Y90 Z257 A100.0 B10.0 C90.0 F300
+<< ERROR: Cartesian move failed (see M115 INTERP)
+>> G1 X260 Y83 Z252 A100.0 B10.0 C90.0 F300
+<< ERROR: Cartesian move failed (see M115 INTERP)
+>> G1 X282 Y69 Z250 A100.0 B10.0 C90.0 F300
+<< ERROR: Cartesian move failed (see M115 INTERP)
+>> G1 X301 Y51 Z252 A100.0 B10.0 C90.0 F300
+<< ERROR: Cartesian move failed (see M115 INTERP)
+>> G1 X315 Y30 Z257 A100.0 B0.0 C90.0 F300
+<< ERROR: Cartesian move failed (see M115 INTERP)
+>> G1 X323 Y7 Z265 A100.0 B0.0 C90.0 F300
+<< ERROR: Cartesian move failed (see M115 INTERP)
+>> G1 X325 Y-17 Z275 A100.0 B0.0 C90.0 F300
+<< ERROR: Cartesian move failed (see M115 INTERP)
+>> G1 X321 Y-40 Z287 A100.0 B-10.0 C90.0 F300
+<< ERROR: Cartesian move failed (see M115 INTERP)
+>> G1 X310 Y-60 Z300 A100.0 B-10.0 C90.0 F300
+<< ERROR: Cartesian move failed (see M115 INTERP)
