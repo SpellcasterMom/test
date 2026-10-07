@@ -5,6 +5,7 @@
 - Несколько машин пушат concurrently: всегда `fetch` перед `push`, чужие коммиты смотреть (`show`/`diff`), мёржить, не перетирать.
 - Remote `github` (SpellcasterMom/test) — только по явной команде, иначе молчит.
 - Коммиты короткие, по делу; `Last modify` в шапке каждого тронутого файла — обновлять.
+- Бамп `FW_VERSION` всегда тянет `FW_VERSION_STR` (минорную тоже).
 
 ## Шапки файлов
 - `Project / Codename: CLAW / Author / Alma Mater (два слова!) / Group / Mentor / Date / Last modify`.
