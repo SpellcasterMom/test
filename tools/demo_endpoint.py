@@ -34,7 +34,7 @@ STEPS = [
 ]
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else None  # None = автопоиск
-BAUD = 115200
+BAUD = 921600
 
 
 def find_port():

@@ -15,7 +15,7 @@ ESP32 НЕ перезагружается принудительно при по
     python demo.py /dev/ttyUSB0           # Linux
     python demo.py COM11                  # Windows
     python demo.py /dev/tty.usbserial-*   # macOS
-    python demo.py /dev/ttyUSB0 115200 12 # порт, скорость, пауза (сек)
+    python demo.py /dev/ttyUSB0 921600 12 # порт, скорость, пауза (сек)
 
 Требования:
     pip install pyserial
@@ -28,7 +28,7 @@ import serial.tools.list_ports
 
 
 # ===== Настройки =====
-DEFAULT_BAUD = 115200
+DEFAULT_BAUD = 921600
 DEFAULT_STARTUP_DELAY = 15.0   # пауза после open, чтобы ESP32 прошёл setup()
 TIMEOUT_SEC = 30              # максимум ожидания ответа на команду
 INTER_CMD_DELAY = 0.2         # пауза между командами (сек)
