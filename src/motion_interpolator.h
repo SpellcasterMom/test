@@ -152,6 +152,10 @@ public:
     /** Короткая причина/параметры последнего движения (шаги, время, отказ). */
     const char *getLastNote() const { return lastNote; }
 
+    /** Записать метку последнего движения (для M115). Публичный: обработчики
+     * команд тоже фиксируют «не ехали» (отказ до вызова интерполятора). */
+    void setMark(const char *mode, const char *note);
+
 private:
     ServoController      *servoCtrl;   // Контроллер сервоприводов
     BacklashCompensator  *backlash;    // Компенсатор люфта
@@ -165,9 +169,6 @@ private:
     bool        moving;        // Флаг выполняющегося движения
     char        lastMode[8];   // LIN / SEQ / CART / NONE — кто ехал последним
     char        lastNote[96];  // шаги/время/причина отказа (для M115)
-
-    /** Записать метку последнего движения (для M115). */
-    void setMark(const char *mode, const char *note);
 
     /**
      * @brief Линейная интерполяция (все сервоприводы одновременно).
