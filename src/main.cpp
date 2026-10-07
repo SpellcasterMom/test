@@ -6,7 +6,7 @@
  * Group       : УТС/б-23-1-о
  * Mentor      : Lipko I.Y.
  * Date        : 2026-09-18
- * Last modify : 2026-10-05
+ * Last modify : 2026-10-07
  *
  * Основной файл контроллера 6-осевого робота-манипулятора на ESP32.
  *
@@ -33,7 +33,7 @@
  * Serial (USB-to-Serial):
  *   TX   → GPIO 1  (или пин UART TX)
  *   RX   → GPIO 3  (или пин UART RX)
- *   Скорость: 115200 бод
+ *   Скорость: SERIAL_BAUD (921600 бод, см. config.h)
  *
  * Ручной пульт (штурвал EC11 + кнопки, все INPUT_PULLUP):
  *   ENC_A (штурвал) → GPIO 32
@@ -1686,7 +1686,7 @@ static int scanGY80() {
 }
 
 void setup() {
-    Serial.begin(115200);
+    Serial.begin(SERIAL_BAUD);
     delay(1000);
 
     // Инициализация дисплея ПЕРЕД I2C/PCA9685

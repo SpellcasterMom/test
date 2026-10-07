@@ -4,7 +4,7 @@ Project     : 6DOF arm (CLAW)
 Author      : Vladimir V. Laykov aka Yago
 Alma Mater  : Sevastopol State University
 Date        : 2026-10-05
-Last modify : 2026-10-05
+Last modify : 2026-10-07
 
 Circle demo: TCP рисует круг в наклонной плоскости.
 Круг r=100, центр (230,0,300), нормаль (0.3,0.4,0.87).
@@ -103,7 +103,7 @@ for arg in sys.argv[1:]:
         PORT = arg  # иначе считаем портом
 if PORT is None:
     PORT = None  # автопоиск в main()
-BAUD = 115200
+BAUD = 921600
 
 
 def find_port():

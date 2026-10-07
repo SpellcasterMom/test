@@ -4,7 +4,7 @@ Project     : 6DOF arm (CLAW)
 Author      : Vladimir V. Laykov aka Yago
 Alma Mater  : Sevastopol State University
 Date        : 2026-10-05
-Last modify : 2026-10-05
+Last modify : 2026-10-07
 
 Джоггер 6-DOF руки с клавиатуры.
 
@@ -35,7 +35,7 @@ except ImportError:
     print("нужен pyserial: pip install pyserial")
     sys.exit(1)
 
-BAUD = 115200
+BAUD = 921600
 STEP_SMALL = 5.0
 STEP_BIG = 25.0
 
