@@ -444,6 +444,7 @@ void handleG0(GCodeCommand &cmd) {
             if (solCount == 0) {
                 strncpy(diagLast.failReason, "IK solution not found",
                         sizeof(diagLast.failReason) - 1);
+                interpolator.setMark("NONE", "no motion (IK refused)");
                 xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
                 sharedState.hasError = true;
                 snprintf(sharedState.lastError, sizeof(sharedState.lastError), "IK not found");
@@ -548,6 +549,7 @@ void handleG0(GCodeCommand &cmd) {
                     strncpy(diagLast.failReason, "No safe IK solution",
                             sizeof(diagLast.failReason) - 1);
                 }
+                interpolator.setMark("NONE", "no motion (refused)");
                 xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
                 sharedState.hasError = true;
                 snprintf(sharedState.lastError, sizeof(sharedState.lastError), "No safe IK");
@@ -905,6 +907,7 @@ void handleG28(GCodeCommand &cmd) {
         xSemaphoreGive(displayMutex);
         Serial.print("ERROR: Home/park target unsafe: ");
         Serial.println(safety.getLastError());
+        interpolator.setMark("NONE", "no motion (refused)");
         return;
     }
     diagEvalSol(diagLast.sols[0], target, cmd.pose);
