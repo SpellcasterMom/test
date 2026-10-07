@@ -6,7 +6,7 @@
  * Group       : УТС/б-23-1-о
  * Mentor      : Lipko I.Y.
  * Date        : 2026-09-18
- * Last modify : 2026-10-05
+ * Last modify : 2026-10-07
  *
  * Основной файл контроллера 6-осевого робота-манипулятора на ESP32.
  *
@@ -33,7 +33,7 @@
  * Serial (USB-to-Serial):
  *   TX   → GPIO 1  (или пин UART TX)
  *   RX   → GPIO 3  (или пин UART RX)
- *   Скорость: 115200 бод
+ *   Скорость: SERIAL_BAUD (921600 бод, см. config.h)
  *
  * Ручной пульт (штурвал EC11 + кнопки, все INPUT_PULLUP):
  *   ENC_A (штурвал) → GPIO 32
@@ -129,6 +129,7 @@
 #include "jog_pendant.h"
 #include "detour_planner.h"
 #include "eeprom_storage.h"
+#include "imu_logger.h"
 
 // Пины SPI для ST7789 заданы в классе LGFX ниже (VSPI).
 // Отдельные #define не нужны.
@@ -168,6 +169,11 @@ SafetyChecker        safety;
 GripperController    gripper;
 JogPendant           pendant;   // ручной пульт: штурвал + NEXT + E-STOP
 DetourPlanner        detour;    // объезд запретных зон: план вейпоинтов
+ImuLogger            imuLogger; // GY-80: опрос 200 Гц + кольцо последнего движения
+
+// Мьютекс общей шины I2C (PCA9685 на Core 0 + GY-80 на Core 1).
+// Создаётся первым в setup; брать только вокруг коротких транзакций.
+SemaphoreHandle_t    i2cMutex = NULL;
 
 // Хранилище EEPROM: сохранение и загрузка конфигурации
 EEPROMStorage        storage;
@@ -232,6 +238,7 @@ struct SharedState {
     float       servoAngles[7];   // Углы 7 сервоприводов (градусы)
     float       gripperPercent;   // Процент открытия захвата (0-100%)
     bool        isMoving;         // Флаг движения
+    bool        isCalibrating;    // Идёт калибровка IMU (дисплей CALIB)
     bool        safetyEnabled;    // Состояние безопасности
     bool        pcaReady;         // PCA9685 найден на I2C
     uint8_t     imuState;         // GYR: 0=нет гиро (красный), 1=гиро без акселя (жёлтый), 2=гиро+аксель (зелёный)
@@ -437,6 +444,7 @@ void handleG0(GCodeCommand &cmd) {
             if (solCount == 0) {
                 strncpy(diagLast.failReason, "IK solution not found",
                         sizeof(diagLast.failReason) - 1);
+                interpolator.setMark("NONE", "no motion (IK refused)");
                 xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
                 sharedState.hasError = true;
                 snprintf(sharedState.lastError, sizeof(sharedState.lastError), "IK not found");
@@ -541,6 +549,7 @@ void handleG0(GCodeCommand &cmd) {
                     strncpy(diagLast.failReason, "No safe IK solution",
                             sizeof(diagLast.failReason) - 1);
                 }
+                interpolator.setMark("NONE", "no motion (refused)");
                 xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
                 sharedState.hasError = true;
                 snprintf(sharedState.lastError, sizeof(sharedState.lastError), "No safe IK");
@@ -873,10 +882,11 @@ void handleG28(GCodeCommand &cmd) {
     bool park = cmd.hasParam['H' - 'A'] && (int)cmd.params['H' - 'A'] == 1;
 
     if (park) {
-        // Компактная сложенная поза в МАТЕМАТИЧЕСКИХ углах (ноль плеча =
-        // вертикаль): то же физическое сложение, что twin-валидация
-        // DH-кадра (0,60,-135). Старое (0,-60,-90) вело локоть ПОД СТОЛ!
-        target.setAll(0, -30, -135, 0, 0, 0, 0);
+        // Компактная сложенная поза (единый источник — DEFAULT_PARK_ANGLES,
+        // точные углы даст владелец). Старое (0,-60,-90) вело локоть ПОД СТОЛ!
+        for (int i = 0; i < 7; i++) {
+            target.angles[i] = DEFAULT_PARK_ANGLES[i];
+        }
     } else {
         for (int i = 0; i < 7; i++) {
             target.angles[i] = homeAngles.angles[i];
@@ -897,15 +907,18 @@ void handleG28(GCodeCommand &cmd) {
         xSemaphoreGive(displayMutex);
         Serial.print("ERROR: Home/park target unsafe: ");
         Serial.println(safety.getLastError());
+        interpolator.setMark("NONE", "no motion (refused)");
         return;
     }
     diagEvalSol(diagLast.sols[0], target, cmd.pose);
     diagLast.solCount = 1;
     diagLast.chosen = 0;
 
-    // Старт — из лучшего известного положения (см. handleG0)
+    // Старт — из лучшего известного положения (см. handleG0).
+    // Подача: из F (G28 F15 — тихо), иначе 300 как раньше.
     interpolator.setCurrentAngles(currentAngles);
-    if (interpolator.moveTo(target, 300.0f)) {
+    float homingFeed = cmd.hasFeedrate ? cmd.feedrate : 300.0f;
+    if (interpolator.moveTo(target, homingFeed)) {
         xSemaphoreTake(angleMutex, portMAX_DELAY);
         currentAngles = target;
         xSemaphoreGive(angleMutex);
@@ -1004,6 +1017,50 @@ void handleM104(GCodeCommand &cmd) {
 /**
  * M105 — вывод текущих углов сервоприводов.
  */
+/**
+ * M119 — телеметрия IMU (GY-80): живые значения, пики, дамп кольца.
+ *   M119          — живые: наклон, последние counts, bias, пики, счётчик
+ *   M119 S=1      — дамп кольца текстом (#IMU строки + OK в конце)
+ *   M119 S=1 D=4  — дамп каждого 4-го сэмпла (быстрее)
+ */
+void handleM119(GCodeCommand &cmd) {
+    if (!imuLogger.hasGyro() && !imuLogger.hasAcc()) {
+        Serial.println("IMU: none (GY-80 not found)");
+        Serial.println("OK");
+        return;
+    }
+    bool dump = cmd.hasParam['S' - 'A'] && cmd.params['S' - 'A'] != 0.0f;
+    if (!dump) {
+        float tr, tp;
+        imuLogger.getTilt(tr, tp);
+        int16_t last[6];
+        imuLogger.getLast(last);
+        float bx, by, bz;
+        imuLogger.getBiasDps(bx, by, bz);
+        float pkA, pkJ;
+        imuLogger.getPeaks(pkA, pkJ);
+        Serial.printf("IMU: tilt R=%.1f P=%.1f\n", tr, tp);
+        Serial.printf("IMU: last ax=%d ay=%d az=%d gx=%d gy=%d gz=%d\n",
+                      last[0], last[1], last[2], last[3], last[4], last[5]);
+        Serial.printf("IMU: bias dps gx=%.2f gy=%.2f gz=%.2f\n", bx, by, bz);
+        Serial.printf("IMU: peak acc=%.2fg jerk=%.1fg/s log n=%lu marks=%lu rec=%d\n",
+                      pkA, pkJ, (unsigned long)imuLogger.sampleCount(),
+                      (unsigned long)imuLogger.markCount(),
+                      imuLogger.isRecording() ? 1 : 0);
+        Serial.printf("IMU: bus fails=%lu recovers=%lu\n",
+                      (unsigned long)imuLogger.busFails(),
+                      (unsigned long)imuLogger.busRecovers());
+        Serial.println("OK");
+        return;
+    }
+    uint8_t decim = 1;
+    if (cmd.hasParam['D' - 'A'] && cmd.params['D' - 'A'] >= 1.0f)
+        decim = (uint8_t)cmd.params['D' - 'A'];
+    imuLogger.setHold(true);   // заморозить кольцо на время печати
+    imuLogger.dump(decim);
+    imuLogger.setHold(false);
+}
+
 void handleM105(GCodeCommand &cmd) {
     printServoAngles();
 }
@@ -1453,13 +1510,13 @@ void handleHelp(GCodeCommand &cmd) {
     Serial.println(HW_VERSION_STR);
     Serial.println("G0 X.. Y.. Z.. A.. B.. C.. J.. - Move (IK/Direct/Mixed, def A-90=tool+Y)");
     Serial.println("G1 X.. Y.. Z.. F..            - Cartesian straight line (TCP holds)");
-    Serial.println("G28                           - Home all axes");
-    Serial.println("G28 H1                        - Park (fold into compact position)");
+    Serial.println("G28 [H1] [F..]                - Home/park (F15 = тихо)");
     Serial.println("G90                           - Absolute mode");
     Serial.println("G91                           - Relative mode");
     Serial.println("M104 P1=90 P2=0 ..            - Set servo angles directly");
     Serial.println("M105                          - Report servo angles");
     Serial.println("M108 S=50                     - Set gripper (percent 0-100)");
+    Serial.println("M119 [S=1] [D=4]               - IMU live / dump ring log");
     Serial.println("M114                          - Report position (FK)");
     Serial.println("M115 [S=1]                    - Kinematics diag (target/sols/actual)");
     Serial.println("M112                          - Emergency stop");
@@ -1634,7 +1691,7 @@ static int scanGY80() {
 }
 
 void setup() {
-    Serial.begin(115200);
+    Serial.begin(SERIAL_BAUD);
     delay(1000);
 
     // Инициализация дисплея ПЕРЕД I2C/PCA9685
@@ -1646,6 +1703,7 @@ void setup() {
     // Создание мьютексов ДО первого использования
     angleMutex = xSemaphoreCreateMutex();
     displayMutex = xSemaphoreCreateMutex();
+    i2cMutex = xSemaphoreCreateMutex();  // шина Wire: сервы + GY-80
 
     // Инициализация PCA9685
     servoCtrl.init();
@@ -1673,6 +1731,11 @@ void setup() {
                   (gy80Mask & 0x02) ? '+' : '-',
                   (gy80Mask & 0x04) ? '+' : '-',
                   (gy80Mask & 0x08) ? '+' : '-');
+
+    // IMU-логгер: драйвер по маске найденного + указатель на интерполятор
+    // (запись идёт пока isMoving). Задача стартует после калибровки ниже.
+    imuLogger.begin(gy80Mask);
+    imuLogger.setInterpolator(&interpolator);
 
     // Связывание интерполятора с зависимостями
     interpolator.setServoController(&servoCtrl);
@@ -1817,6 +1880,46 @@ void setup() {
     }
     strncpy(sharedState.lastCommand, "-", sizeof(sharedState.lastCommand) - 1);
 
+    // Стартовый заезд в home — ВСЕГДА (иначе софт врёт нули, а железо
+    // стоит где попало, и первый G28 даёт прыжок). Едем штатным G28:
+    // там safety-пречек цели, синк стейта и диагностика.
+    // Конвенция: ночью рука в парке — стартуем из DEFAULT_PARK_ANGLES,
+    // едем тихо (F15). Нарушил конвенцию (не запарковался) — заезд всё
+    // равно будет, но стартовая точка враньё: рука должна стоять свободно!
+    {
+        for (int i = 0; i < 7; i++) {
+            currentAngles.angles[i] = DEFAULT_PARK_ANGLES[i];
+        }
+        GCodeCommand cmd28;  // пустая = без H1, едем в homeAngles
+        cmd28.hasFeedrate = true;
+        cmd28.feedrate = 15.0f;  // тихо: 15% скорости
+        handleG28(cmd28);
+    }
+    // Калибровка нуля гиро — только если IMU есть. Для bias нужна лишь
+    // неподвижность (рука уже стоит в home), а не сама поза.
+    // Рука должна стоять смирно!
+    if (imuLogger.ready()) {
+        xSemaphoreTake(displayMutex, portMAX_DELAY);
+        sharedState.isCalibrating = true;
+        xSemaphoreGive(displayMutex);
+        // Задача дисплея ещё не создана — рисуем CALIB напрямую.
+        // Литералы вместо ZONE_STATUS_Y/COLOR_MOVING: их #define идут
+        // ниже по файлу (176 / TFT_YELLOW), setup выше — компилятор иначе
+        // не видит. Значения сверены с дефайнами, не магические.
+        tft.setTextSize(2);
+        tft.setCursor(4, 176 + 8);
+        tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+        tft.print(">> CALIB");
+        Serial.println("IMU CAL: стоим в home, не трогать руку (отстойка + 2с нуля)...");
+        delay(1500);  // отстойка механики: звон MG90S + выборка люфта
+        imuLogger.calibrateGyro();
+        xSemaphoreTake(displayMutex, portMAX_DELAY);
+        sharedState.isCalibrating = false;
+        xSemaphoreGive(displayMutex);
+        Serial.println("IMU CAL: done");
+    }
+    imuLogger.startTask();  // опрос 200 Гц на Core 1 (после калибровки!)
+
     // Создание задач
     xTaskCreatePinnedToCore(core0Task, "Core0_Motion",  8192, NULL, 1, &core0TaskHandle, 0);
     xTaskCreatePinnedToCore(core1Task, "Core1_Display", 8192, NULL, 1, &core1TaskHandle, 1);
@@ -1897,7 +2000,7 @@ static float lastTCP[6]    = {99999, 99999, 99999, 99999, 99999, 99999};
 static float lastJoints[7] = {99999, 99999, 99999, 99999, 99999, 99999, 99999};
 static float lastGrip      = -1;
 static int8_t lastModeAbs  = -1;   // -1 = неизвестно, 0 = ABS, 1 = REL
-static int8_t lastStatus   = -1;   // -1 = неизвестно, 0 = READY, 1 = MOVING, 2 = ERROR
+static int8_t lastStatus   = -1;   // -1 = неизвестно, 0 = READY, 1 = MOVING, 2 = ERROR, 3 = CALIB
 static char lastCmdShown[24] = ""; // последняя выведенная команда (анти-мерцание)
 
 static void drawField(int xLabel, int xValue, int y,
@@ -2065,11 +2168,11 @@ void displayUpdate() {
     // === Status Bar (3 строки) ===
     int sy = ZONE_STATUS_Y + 8;
 
-    // --- Строка 1: READY / MOVING / ERROR + режим + счётчик справа ---
+    // --- Строка 1: READY / MOVING / ERROR / CALIB + режим + счётчик справа ---
     // Статус — только при смене (безусловная перерисовка даёт мерцание
     // и затирает соседей). Поле статуса ровно 8 символов (x=4..100),
-    // ABS начинается с x=110 — пересечений нет.
-    int8_t st = state.hasError ? 2 : (state.isMoving ? 1 : 0);
+    // ABS начинается с x=110 — пересечений нет. CALIB (8 симв.) как MOVING.
+    int8_t st = state.hasError ? 2 : (state.isCalibrating ? 3 : (state.isMoving ? 1 : 0));
     if (st != lastStatus) {
         lastStatus = st;
         tft.setTextSize(2);
@@ -2077,6 +2180,9 @@ void displayUpdate() {
         if (st == 2) {
             tft.setTextColor(COLOR_ERROR, TFT_BLACK);
             tft.print("! ERROR ");
+        } else if (st == 3) {
+            tft.setTextColor(COLOR_MOVING, TFT_BLACK);
+            tft.print(">> CALIB");
         } else if (st == 1) {
             tft.setTextColor(COLOR_MOVING, TFT_BLACK);
             tft.print("> MOVING");

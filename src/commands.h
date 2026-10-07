@@ -6,7 +6,7 @@
  * Group       : УТС/б-23-1-о
  * Mentor      : Lipko I.Y.
  * Date        : 2026-09-18
- * Last modify : 2026-10-01
+ * Last modify : 2026-10-05
  */
 
 #pragma once
@@ -26,6 +26,7 @@ void handleG91(GCodeCommand &cmd);
 void handleM104(GCodeCommand &cmd);
 void handleM105(GCodeCommand &cmd);
 void handleM108(GCodeCommand &cmd);
+void handleM119(GCodeCommand &cmd);
 void handleM114(GCodeCommand &cmd);
 void handleM115(GCodeCommand &cmd);
 void handleM112(GCodeCommand &cmd);
@@ -200,6 +201,21 @@ const CommandDef COMMANDS[] = {
         },
         .paramCount = 1,
         .handler = handleM108,
+    },
+    {
+        .name = "M119",
+        .description = "IMU telemetry: M119 [S=1 dump] [D=4 decimate]",
+        // Параметры M119:
+        //   без параметров — живые значения (наклон, counts, bias, пики);
+        //   S=1 — дамп кольца последнего движения (#IMU строки + OK);
+        //   D=N — печатать каждый N-й сэмпл (быстрее).
+        //       Пример: M119 S=1 D=4 — дамп с децимацией 4
+        .params = {
+            {'S', PARAM_FLOAT, -1, 0.0},
+            {'D', PARAM_FLOAT, -1, 1.0},
+        },
+        .paramCount = 2,
+        .handler = handleM119,
     },
     {
         .name = "M114",
