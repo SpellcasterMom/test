@@ -444,6 +444,7 @@ void handleG0(GCodeCommand &cmd) {
             if (solCount == 0) {
                 strncpy(diagLast.failReason, "IK solution not found",
                         sizeof(diagLast.failReason) - 1);
+                interpolator.setMark("NONE", "no motion (IK refused)");
                 xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
                 sharedState.hasError = true;
                 snprintf(sharedState.lastError, sizeof(sharedState.lastError), "IK not found");
@@ -548,6 +549,7 @@ void handleG0(GCodeCommand &cmd) {
                     strncpy(diagLast.failReason, "No safe IK solution",
                             sizeof(diagLast.failReason) - 1);
                 }
+                interpolator.setMark("NONE", "no motion (refused)");
                 xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
                 sharedState.hasError = true;
                 snprintf(sharedState.lastError, sizeof(sharedState.lastError), "No safe IK");
@@ -880,10 +882,11 @@ void handleG28(GCodeCommand &cmd) {
     bool park = cmd.hasParam['H' - 'A'] && (int)cmd.params['H' - 'A'] == 1;
 
     if (park) {
-        // Компактная сложенная поза в МАТЕМАТИЧЕСКИХ углах (ноль плеча =
-        // вертикаль): то же физическое сложение, что twin-валидация
-        // DH-кадра (0,60,-135). Старое (0,-60,-90) вело локоть ПОД СТОЛ!
-        target.setAll(0, -30, -135, 0, 0, 0, 0);
+        // Компактная сложенная поза (единый источник — DEFAULT_PARK_ANGLES,
+        // точные углы даст владелец). Старое (0,-60,-90) вело локоть ПОД СТОЛ!
+        for (int i = 0; i < 7; i++) {
+            target.angles[i] = DEFAULT_PARK_ANGLES[i];
+        }
     } else {
         for (int i = 0; i < 7; i++) {
             target.angles[i] = homeAngles.angles[i];
@@ -904,15 +907,18 @@ void handleG28(GCodeCommand &cmd) {
         xSemaphoreGive(displayMutex);
         Serial.print("ERROR: Home/park target unsafe: ");
         Serial.println(safety.getLastError());
+        interpolator.setMark("NONE", "no motion (refused)");
         return;
     }
     diagEvalSol(diagLast.sols[0], target, cmd.pose);
     diagLast.solCount = 1;
     diagLast.chosen = 0;
 
-    // Старт — из лучшего известного положения (см. handleG0)
+    // Старт — из лучшего известного положения (см. handleG0).
+    // Подача: из F (G28 F15 — тихо), иначе 300 как раньше.
     interpolator.setCurrentAngles(currentAngles);
-    if (interpolator.moveTo(target, 300.0f)) {
+    float homingFeed = cmd.hasFeedrate ? cmd.feedrate : 300.0f;
+    if (interpolator.moveTo(target, homingFeed)) {
         xSemaphoreTake(angleMutex, portMAX_DELAY);
         currentAngles = target;
         xSemaphoreGive(angleMutex);
@@ -1504,8 +1510,7 @@ void handleHelp(GCodeCommand &cmd) {
     Serial.println(HW_VERSION_STR);
     Serial.println("G0 X.. Y.. Z.. A.. B.. C.. J.. - Move (IK/Direct/Mixed, def A-90=tool+Y)");
     Serial.println("G1 X.. Y.. Z.. F..            - Cartesian straight line (TCP holds)");
-    Serial.println("G28                           - Home all axes");
-    Serial.println("G28 H1                        - Park (fold into compact position)");
+    Serial.println("G28 [H1] [F..]                - Home/park (F15 = тихо)");
     Serial.println("G90                           - Absolute mode");
     Serial.println("G91                           - Relative mode");
     Serial.println("M104 P1=90 P2=0 ..            - Set servo angles directly");
@@ -1878,10 +1883,16 @@ void setup() {
     // Стартовый заезд в home — ВСЕГДА (иначе софт врёт нули, а железо
     // стоит где попало, и первый G28 даёт прыжок). Едем штатным G28:
     // там safety-пречек цели, синк стейта и диагностика.
-    // ВНИМАНИЕ: движение вслепую из неизвестной позы на скорости G28 —
-    // рука должна стоять свободно.
+    // Конвенция: ночью рука в парке — стартуем из DEFAULT_PARK_ANGLES,
+    // едем тихо (F15). Нарушил конвенцию (не запарковался) — заезд всё
+    // равно будет, но стартовая точка враньё: рука должна стоять свободно!
     {
+        for (int i = 0; i < 7; i++) {
+            currentAngles.angles[i] = DEFAULT_PARK_ANGLES[i];
+        }
         GCodeCommand cmd28;  // пустая = без H1, едем в homeAngles
+        cmd28.hasFeedrate = true;
+        cmd28.feedrate = 15.0f;  // тихо: 15% скорости
         handleG28(cmd28);
     }
     // Калибровка нуля гиро — только если IMU есть. Для bias нужна лишь
