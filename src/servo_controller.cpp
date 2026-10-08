@@ -6,7 +6,7 @@
  * Group       : УТС/б-23-1-о
  * Mentor      : Lipko I.Y.
  * Date        : 2026-09-18
- * Last modify : 2026-10-05
+ * Last modify : 2026-10-07
  */
 
 #include "servo_controller.h"
@@ -89,7 +89,9 @@ void ServoController::setConfig(const ServoConfig configs[7]) {
  *    correctedAngle = servoAngle * (correctionFactor / 100.0)
  *
  * 3. ИНВЕРТИРОВАНИЕ НАПРАВЛЕНИЯ (isInverted):
- *    correctedAngle = -correctedAngle (если isInverted)
+ *    зеркало относительно центра серво-диапазона:
+ *    correctedAngle = (servoMin+servoMax) - correctedAngle.
+ *    Центр стоит (P1: q=0 → 135), края меняются местами.
  *
  * 4. ОГРАНИЧЕНИЕ УГЛА (clamping):
  *    constrain(correctedAngle, minAngle+homeOffset, maxAngle+homeOffset)
@@ -122,16 +124,22 @@ void ServoController::setAngle(int servoId, float angle) {
     float correctedAngle = servoAngle * correction;
 
     // ШАГ 2: инвертирование направления для зеркально установленных серво.
+    // Зеркалим относительно ЦЕНТРА серво-диапазона, а не через минус:
+    // наивное -(q+off) с последующим clamp ломает всё (P1: q=0 → -135 → 0
+    // вместо 135; края ±135 тоже схлопываются в 0). Правильно:
+    // phys = (servoMin+servoMax) - (q+off): центр стоит, края меняются.
+    // P1: q=0 → 135 ✓, q=+135 → 0, q=-135 → 270 ✓.
+    // P7 (off=0, [0,100]): q → 100-q ✓.
+    float servoMin = (float)configs[servoId].minAngle + configs[servoId].homeOffset;
+    float servoMax = (float)configs[servoId].maxAngle + configs[servoId].homeOffset;
     if (configs[servoId].isInverted) {
-        correctedAngle = -correctedAngle;
+        correctedAngle = (servoMin + servoMax) - correctedAngle;
     }
 
     // ШАГ 3: ограничение угла в СЕРВО-диапазоне (после offset).
     // minAngle/maxAngle в config.h — математические, поэтому здесь
     // смещаем границы на homeOffset для получения фактического
     // физического диапазона сервы.
-    float servoMin = (float)configs[servoId].minAngle + configs[servoId].homeOffset;
-    float servoMax = (float)configs[servoId].maxAngle + configs[servoId].homeOffset;
     correctedAngle = constrain(correctedAngle, servoMin, servoMax);
 
     // ШАГ 4: конвертация угла в ширину импульса (микросекунды).
