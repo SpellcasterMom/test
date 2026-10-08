@@ -40,7 +40,7 @@ flowchart TD
     GEO --> WR["Ориентация: q4,q5,q6<br/>R36 = R03ᵀ × R06 → разложение"]
     WR --> DLS["refine: DLS-итерации<br/>clamp ±135° / ±90°"]
     DLS --> FK["FK-проверка: dPos + ось-ошибка"]
-    FK --> SORT["Сортировка по min-residual<br/>+ continuity-биас к текущей позе"]
+    FK --> SORT["Сортировка по min-residual<br/>+ штраф за дальность от текущей позы"]
     SORT --> BEST["Лучшее решение → порог 10/15"]
 ```
 
