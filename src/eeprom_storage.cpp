@@ -37,15 +37,33 @@
  */
 
 #include "eeprom_storage.h"
+#include <cstddef>
 
 /**
  * begin — Инициализация EEPROM.
  *
  * Выделяет EEPROM_SIZE (512) байт памяти для операций чтения/записи.
  * Должен быть вызван один раз в начале работы программы (обычно в setup()).
+ * Сразу грузит кэш одним EEPROM.get: дальше все чтения идут из RAM.
  */
 void EEPROMStorage::begin() {
     EEPROM.begin(EEPROM_SIZE);
+    ensureCache();
+}
+
+/**
+ * ensureCache — ленивая подгрузка кэша (одно чтение на всё время жизни).
+ *
+ * Если кэш ещё не готов — один EEPROM.get(0) + validateData, результат
+ * в data/cacheValid/cacheReady. Повторные вызовы ничего не читают.
+ */
+void EEPROMStorage::ensureCache() {
+    if (cacheReady) return;
+    EEPROMData d;
+    EEPROM.get(0, d);
+    data = d;
+    cacheValid = validateData(d);
+    cacheReady = true;
 }
 
 /**
@@ -89,6 +107,8 @@ void EEPROMStorage::saveConfig(const ManipulatorConfig &config, const float home
 
     d.checksum = calculateChecksum(d);
     data = d;
+    cacheReady = true;
+    cacheValid = true;
 
     EEPROM.put(0, d);
     EEPROM.commit();
@@ -98,14 +118,13 @@ void EEPROMStorage::saveConfig(const ManipulatorConfig &config, const float home
  * loadConfig — Загрузка полной конфигурации + домашних углов из EEPROM.
  *
  * Алгоритм:
- *   1. Чтение структуры EEPROMData из EEPROM по адресу 0.
+ *   1. Данные берутся из кэша (одно чтение в begin()/ensureCache()).
  *   2. Валидация через validateData() — проверка magic и checksum.
  *   3. Если данные валидны:
- *      a. Сохранение во внутренний буфер data.
- *      b. Копирование конфигураций сервоприводов в config.servos[].
- *      c. Копирование домашних углов в homeAngles[].
- *      d. Копирование ограничений рабочей области и безопасности.
- *      e. Возврат true.
+  *      a. Копирование конфигураций сервоприводов в config.servos[].
+  *      b. Копирование домашних углов в homeAngles[].
+  *      c. Копирование ограничений рабочей области и безопасности.
+  *      d. Возврат true.
  *   4. Если данные невалидны — возврат false (вызывающий код должен
  *      использовать значения по умолчанию).
  *
@@ -114,14 +133,12 @@ void EEPROMStorage::saveConfig(const ManipulatorConfig &config, const float home
  * @return true если данные успешно загружены, false если данные невалидны
  */
 bool EEPROMStorage::loadConfig(ManipulatorConfig &config, float homeAngles[7]) {
-    EEPROMData d;
-    EEPROM.get(0, d);
+    ensureCache();
+    const EEPROMData &d = data;
 
-    if (!validateData(d)) {
+    if (!cacheValid) {
         return false;
     }
-
-    data = d;
 
     for (int i = 0; i < 7; i++) {
         config.servos[i] = d.servos[i];
@@ -160,9 +177,11 @@ bool EEPROMStorage::loadConfig(ManipulatorConfig &config, float homeAngles[7]) {
  * @param homeAngles — массив из 7 домашних углов сервоприводов
  */
 void EEPROMStorage::saveHome(const float homeAngles[7]) {
-    EEPROMData d;
-    EEPROM.get(0, d);
+    ensureCache();
+    EEPROMData d = data;
 
+    // Как раньше: смотрим только magic (не полный validate). Если magic на месте,
+    // но checksum битый — базу чиним: конфиг сохраняем, checksum пересчитаем ниже.
     if (d.magic != EEPROM_MAGIC) {
         d = {};
         d.magic = EEPROM_MAGIC;
@@ -185,6 +204,8 @@ void EEPROMStorage::saveHome(const float homeAngles[7]) {
 
     d.checksum = calculateChecksum(d);
     data = d;
+    cacheReady = true;
+    cacheValid = true;
 
     EEPROM.put(0, d);
     EEPROM.commit();
@@ -194,7 +215,7 @@ void EEPROMStorage::saveHome(const float homeAngles[7]) {
  * loadHome — Загрузка только домашних углов из EEPROM.
  *
  * Алгоритм:
- *   1. Чтение структуры EEPROMData из EEPROM.
+ *   1. Данные берутся из кэша.
  *   2. Валидация через validateData().
  *   3. Если данные валидны — копирование homeAngles из структуры, возврат true.
  *   4. Если данные невалидны — заполнение homeAngles значениями
@@ -204,10 +225,9 @@ void EEPROMStorage::saveHome(const float homeAngles[7]) {
  * @return true если данные успешно загружены, false если используются defaults
  */
 bool EEPROMStorage::loadHome(float homeAngles[7]) {
-    EEPROMData d;
-    EEPROM.get(0, d);
+    ensureCache();
 
-    if (!validateData(d)) {
+    if (!cacheValid) {
         for (int i = 0; i < 7; i++) {
             homeAngles[i] = DEFAULT_HOME_ANGLES[i];
         }
@@ -215,7 +235,7 @@ bool EEPROMStorage::loadHome(float homeAngles[7]) {
     }
 
     for (int i = 0; i < 7; i++) {
-        homeAngles[i] = d.homeAngles[i];
+        homeAngles[i] = data.homeAngles[i];
     }
 
     return true;
@@ -231,6 +251,9 @@ bool EEPROMStorage::loadHome(float homeAngles[7]) {
  */
 void EEPROMStorage::clear() {
     EEPROMData d = {};
+    data = d;
+    cacheReady = true;
+    cacheValid = false;
     EEPROM.put(0, d);
     EEPROM.commit();
 }
@@ -238,25 +261,22 @@ void EEPROMStorage::clear() {
 /**
  * isConfigValid — Проверка корректности данных в EEPROM.
  *
- * Читает структуру из EEPROM и проверяет её через validateData().
- * Не изменяет внутренний буфер data.
+ * Идёт из кэша, EEPROM не читает. Не изменяет внутренний буфер data.
  *
  * @return true если magic и checksum совпадают, false в противном случае
  */
 bool EEPROMStorage::isConfigValid() {
-    EEPROMData d;
-    EEPROM.get(0, d);
-    return validateData(d);
+    ensureCache();
+    return cacheValid;
 }
 
 /**
  * getStoredFwVersion — версия прошивки из EEPROM (0 = нет/битые/старый формат).
  */
 uint32_t EEPROMStorage::getStoredFwVersion() {
-    EEPROMData d;
-    EEPROM.get(0, d);
-    if (!validateData(d)) return 0;
-    return d.fwVersion;
+    ensureCache();
+    if (!cacheValid) return 0;
+    return data.fwVersion;
 }
 
 /**
@@ -282,11 +302,17 @@ uint32_t EEPROMStorage::getStoredFwVersion() {
 uint16_t EEPROMStorage::calculateChecksum(const EEPROMData &d) {
     uint16_t sum = 0;
     const uint8_t *ptr = (const uint8_t *)&d;
-    size_t offset = offsetof(EEPROMData, checksum);
-    for (size_t i = 0; i < sizeof(EEPROMData); i++) {
-        if (i >= offset && i < offset + sizeof(uint16_t)) continue;
+    const size_t offset = offsetof(EEPROMData, checksum);
+    const size_t total = sizeof(EEPROMData);
+    // Два диапазона вместо бранча на каждый байт: до checksum и после.
+    // Математика та же (XOR + ротация влево на 1 бит после каждого байта).
+    for (size_t i = 0; i < offset; i++) {
         sum ^= ptr[i];
         sum = (sum << 1) | (sum >> 15);  // ротация влево на 1 бит
+    }
+    for (size_t i = offset + sizeof(uint16_t); i < total; i++) {
+        sum ^= ptr[i];
+        sum = (sum << 1) | (sum >> 15);
     }
     return sum;
 }

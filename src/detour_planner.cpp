@@ -33,13 +33,13 @@ float detRand01() {
     return (float)(detRngState >> 8) / 16777216.0f;
 }
 
-float detDist6(const float a[6], const float b[6]) {
+float detDist6Sq(const float a[6], const float b[6]) {
     float s = 0;
     for (int i = 0; i < 6; i++) {
         float d = a[i] - b[i];
         s += d * d;
     }
-    return sqrt(s);
+    return s;
 }
 }  // namespace
 
@@ -188,11 +188,12 @@ int DetourPlanner::plan(const float qstart[6], const JointAngles &target,
                 }
             }
             int bni = 0;
-            float bnd = 1e30f;
+            float bnd2 = 1e30f;
             for (int i = 0; i < count; i++) {
-                float d = detDist6(detNodes[i], qr);
-                if (d < bnd) { bnd = d; bni = i; }
+                float d2 = detDist6Sq(detNodes[i], qr);
+                if (d2 < bnd2) { bnd2 = d2; bni = i; }
             }
+            float bnd = sqrt(bnd2);
             float qn[6];
             if (bnd < 1e-9f) {
                 for (int i = 0; i < 6; i++) qn[i] = detNodes[bni][i];
@@ -227,11 +228,12 @@ int DetourPlanner::plan(const float qstart[6], const JointAngles &target,
         }
         if (goalIdx < 0) {
             // Финальная попытка: цель из ближайшего узла.
+            // Тут только сравнение — квадрата достаточно, корень не нужен.
             int bni = 0;
-            float bnd = 1e30f;
+            float bnd2 = 1e30f;
             for (int i = 0; i < count; i++) {
-                float d = detDist6(detNodes[i], qg);
-                if (d < bnd) { bnd = d; bni = i; }
+                float d2 = detDist6Sq(detNodes[i], qg);
+                if (d2 < bnd2) { bnd2 = d2; bni = i; }
             }
             float qgo[6], qbb[6];
             for (int i = 0; i < 6; i++) { qgo[i] = qg[i]; qbb[i] = detNodes[bni][i]; }
