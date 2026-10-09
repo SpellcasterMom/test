@@ -168,6 +168,33 @@ Mat4 FKSolver::computeFK(const float q[6], int upToJoint) {
 }
 
 /**
+ * Однопроходная цепочка: один проход по 6 DH-матрицам даёт и все
+ * позиции суставов, и накопленную T06. Все геттеры ниже — тонкие
+ * обёртки над ней (поведение то же, трансформов в разы меньше).
+ */
+void FKSolver::computeChain(const float q[6], Vec3 joints[7], Mat4 &T06) {
+    Mat4 T = Mat4::identity();
+    joints[0] = {0, 0, 0};
+    for (int i = 0; i < 6; i++) {
+        float theta = q[i] * DEG_TO_RAD + dh[i][3] * DEG_TO_RAD;
+        Mat4 Ti = dhTransform(dh[i][0], dh[i][1] * DEG_TO_RAD, dh[i][2], theta);
+        T = T * Ti;
+        joints[i + 1] = T.getPosition();
+    }
+    T06 = T;
+}
+
+/**
+ * Однопроходная поза: joints + TCP + направление пальца + T06.
+ */
+void FKSolver::getPose(const float q[6], Vec3 joints[7], Vec3 &tcp, Vec3 &fingerDir, Mat4 &T06) {
+    computeChain(q, joints, T06);
+    fingerDir = {T06.m[0][2], T06.m[1][2], T06.m[2][2]};
+    const Vec3 &wrist = joints[6];
+    tcp = wrist + fingerDir * fingerLength;
+}
+
+/**
  * Получение позиции конкретного сустава в базовой СК.
  *
  * Позиция сустава joint — это вектор переноса из матрицы T0,(joint-1).
@@ -178,8 +205,11 @@ Mat4 FKSolver::computeFK(const float q[6], int upToJoint) {
  */
 Vec3 FKSolver::getJointPosition(const float q[6], int joint) {
     if (joint <= 0) return {0, 0, 0};
-    Mat4 T = computeFK(q, joint - 1);
-    return T.getPosition();
+    if (joint > 6) joint = 6;
+    Vec3 joints[7];
+    Mat4 T06;
+    computeChain(q, joints, T06);
+    return joints[joint];
 }
 
 /**
@@ -192,10 +222,9 @@ Vec3 FKSolver::getJointPosition(const float q[6], int joint) {
  * @param joints — выходной массив из 7 Vec3.
  */
 void FKSolver::getAllJointPositions(const float q[6], Vec3 joints[7]) {
-    joints[0] = {0, 0, 0};  // база — начало координат
-    for (int i = 1; i <= 6; i++) {
-        joints[i] = getJointPosition(q, i);
-    }
+    Mat4 T06;
+    computeChain(q, joints, T06);
+    (void)T06;
 }
 
 /**
@@ -217,9 +246,11 @@ void FKSolver::getAllJointPositions(const float q[6], Vec3 joints[7]) {
  * @return Позиция кончика пальца {x, y, z} в мм (базовая СК).
  */
 Vec3 FKSolver::getEndEffector(const float q[6]) {
-    Vec3 wrist = getJointPosition(q, 6);       // в базовой СК
-    Vec3 dir   = getFingerDirection(q);         // в базовой СК (после фикса)
-    return wrist + dir * fingerLength;
+    Vec3 joints[7];
+    Vec3 tcp, dir;
+    Mat4 T06;
+    getPose(q, joints, tcp, dir, T06);
+    return tcp;
 }
 
 /**
@@ -248,9 +279,11 @@ Vec3 FKSolver::getEndEffector(const float q[6]) {
  * @return Единичный вектор направления выдвижения пальца (базовая СК).
  */
 Vec3 FKSolver::getFingerDirection(const float q[6]) {
-    // Полная матрица T06 = T01 · T12 · T23 · T34 · T45 · T56
-    // (upToJoint = 5 = индекс последнего звена в массиве 0..5)
-    Mat4 T06 = computeFK(q, 5);
+    // Ось Z из накопленной T06 — уже в базовой СК (см. getPose).
+    Vec3 joints[7];
+    Mat4 T06;
+    computeChain(q, joints, T06);
+    (void)joints;
 
     // Третий столбец матрицы вращения R06 — это ось Z 6-го звена
     // в координатах базовой СК. Единичный вектор (для матриц поворота).
@@ -284,8 +317,19 @@ Mat4 FKSolver::getTransform(const float q[6], int upToJoint) {
  * @return Матрица 4×4, содержащая матрицу вращения 3×3 в верхнем левом углу.
  */
 Mat4 FKSolver::getRotationMatrix(const float q[6], int upToJoint) {
-    Mat4 T = computeFK(q, upToJoint);
     Mat4 R = Mat4::identity();
+    if (upToJoint >= 5) {
+        // Горячий путь (ikError, moveToPose): берём R06 из однопроходной T06.
+        Vec3 joints[7];
+        Mat4 T06;
+        computeChain(q, joints, T06);
+        (void)joints;
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+                R.m[i][j] = T06.m[i][j];
+        return R;
+    }
+    Mat4 T = computeFK(q, upToJoint);
     // Копируем только верхний левый блок 3×3 (матрица вращения)
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 3; j++)

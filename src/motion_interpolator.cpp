@@ -583,11 +583,15 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
     // Допуски те же (1мм/1°). В конце восстанавливаем (дефолт 100/1.0/1.0).
     ikSolver->setNumericParams(25, 1.0f, 1.0f);
 
-    // --- Стартовая поза TCP из текущих углов ---
+    // --- Стартовая поза TCP из текущих углов (один проход FK) ---
     float qs[6];
     for (int i = 0; i < 6; i++) qs[i] = currentAngles.angles[i];
-    Vec3 p0 = fkSolver->getEndEffector(qs);
-    Mat4 T0 = fkSolver->getRotationMatrix(qs, 5);
+    Vec3 j0[7], fdir0;
+    Vec3 p0;
+    Mat4 T0;
+    fkSolver->getPose(qs, j0, p0, fdir0, T0);
+    (void)j0;
+    (void)fdir0;
     float R0[9] = {T0.m[0][0], T0.m[0][1], T0.m[0][2],
                    T0.m[1][0], T0.m[1][1], T0.m[1][2],
                    T0.m[2][0], T0.m[2][1], T0.m[2][2]};

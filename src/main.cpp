@@ -335,9 +335,9 @@ static void diagEvalSol(DiagSol &s, const JointAngles &q, const Pose &target) {
     s.q = q;
     float qq[6];
     for (int i = 0; i < 6; i++) qq[i] = q.angles[i];
-    fkSolver.getAllJointPositions(qq, s.joints);
-    s.tcp = fkSolver.getEndEffector(qq);
-    s.dir = fkSolver.getFingerDirection(qq);
+    Mat4 T06dummy;
+    fkSolver.getPose(qq, s.joints, s.tcp, s.dir, T06dummy);
+    (void)T06dummy;
     float dx = s.tcp.x - target.position.x;
     float dy = s.tcp.y - target.position.y;
     float dz = s.tcp.z - target.position.z;

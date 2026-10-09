@@ -694,8 +694,17 @@ void IKSolver::ikError(const float qrad[6], const Mat4 &Rt, const Vec3 &pt, floa
     float qdeg[6];
     for (int i = 0; i < 6; i++) qdeg[i] = qrad[i] * RAD_TO_DEG;
 
-    Vec3 p = fkSolver.getEndEffector(qdeg);
-    Mat4 R = fkSolver.getRotationMatrix(qdeg, 5);
+    Vec3 joints[7];
+    Vec3 p, fdir;
+    Mat4 T06;
+    fkSolver.getPose(qdeg, joints, p, fdir, T06);
+    (void)joints;
+    (void)fdir;
+    // R06 — верхний левый 3×3 из T06 (getRotationMatrix(q,5) давал то же).
+    Mat4 R = Mat4::identity();
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            R.m[i][j] = T06.m[i][j];
 
     e[0] = pt.x - p.x;
     e[1] = pt.y - p.y;

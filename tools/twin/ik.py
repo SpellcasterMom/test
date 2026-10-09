@@ -201,12 +201,11 @@ def matrix_to_euler(R):
 
 def fk_pose(qdeg, dh, finger=105.0):
     """FK-поза: (pos, euler). Для генерации целей из известных q."""
-    from fk import dh_transform as _dh, mat_mul as _mm
     T = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
          0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
     for i in range(6):
         a, alpha, d, off = dh[i]
-        T = _mm(T, _dh(a, alpha, d, qdeg[i] + off))
+        T = mat_mul(T, dh_transform(a, alpha, d, qdeg[i] + off))
     pos = (T[3] + T[2] * finger, T[7] + T[6] * finger, T[11] + T[10] * finger)
     return pos, matrix_to_euler(T)
 

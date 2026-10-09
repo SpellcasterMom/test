@@ -21,14 +21,11 @@ ZMIN = [0, 0, 10, 10, 10, 10]
 
 def links_ok(q):
     """Зеркало SafetyChecker: звенья + палец, сэмплинг как в прошивке."""
-    r = fk_chain(q, DH2, finger=0.0)
+    # Один проход fk_chain с пальцем: joints + tcp сразу (раньше joints
+    # из fk_chain + второй полный проход по матрицам ради tcp).
+    r = fk_chain(q, DH2, finger=F)
     J = list(r["joints"])
-    # TCP отдельно (конец пальца вдоль оси фланца)
-    T = [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
-    for i in range(6):
-        a, al, d, off = DH2[i]
-        T = mat_mul(T, dh_transform(a, al, d, q[i] + off))
-    tcp = (T[3] + T[2] * F, T[7] + T[6] * F, T[11] + T[10] * F)
+    tcp = r["tcp"]
     segs = [(J[i], J[i + 1]) for i in range(6)] + [(J[6], tcp)]
     for idx, (a, b) in enumerate(segs):
         lim = ZMIN[5] if idx == 6 else ZMIN[min(idx, 5)]

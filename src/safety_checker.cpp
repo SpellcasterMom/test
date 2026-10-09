@@ -319,9 +319,14 @@ bool SafetyChecker::checkPosition(const Vec3 &pos) const {
 bool SafetyChecker::checkAllLinks(const float q[6]) {
     if (!enabled) return true;
 
-    // Вычисляем позиции всех сочленений с помощью прямой кинематики
+    // Однопроходная FK: joints + TCP за 6 трансформов
+    // (раньше getAllJointPositions + getEndEffector считали цепочку дважды).
     Vec3 joints[7];
-    fkSolver.getAllJointPositions(q, joints);
+    Vec3 tcp, fdir;
+    Mat4 T06;
+    fkSolver.getPose(q, joints, tcp, fdir, T06);
+    (void)fdir;
+    (void)T06;
 
     // Проверка каждого звена, КРОМЕ нулевого (J0→J1 — статическая колонна:
     // оба конца зафиксированы всегда, считать её столкновение со столом
@@ -356,7 +361,7 @@ bool SafetyChecker::checkAllLinks(const float q[6]) {
     }
 
     // Проверка виртуального 7-го звена: палец захватчика (от 6-го сочленения до TCP)
-    Vec3 tcp = fkSolver.getEndEffector(q);
+    // tcp уже из getPose выше — повторного FK нет.
     if (!checkLinkSafety(joints[6], tcp, 6)) {
         return false;
     }
