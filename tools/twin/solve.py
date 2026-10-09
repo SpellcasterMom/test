@@ -7,7 +7,7 @@
 import math
 from ik import (euler_to_matrix, refine, clamp_angle, ORI_W,
                 DH_WINNER, fk_pose)
-from fk import dh_transform, mat_mul
+from fk import dh_transform, mat_mul, fk_chain
 
 FW_DH = [[25, 90, 110, 0], [160, 0, 0, 90], [155, 0, 0, 0],
          [25, 90, 0, 0], [25, -90, 0, 0], [25, 0, 0, 0]]
@@ -70,7 +70,6 @@ def seed_arm(w, dh):
     J4_target = O6_target - (O6_straight - J4), где straight = FK(q123,0,0,0).
     Убирает систематические ~107мм ошибки seed-модели под сферическое запястье.
     O6 = фланец joints[6] (в DH-v2 это фланец, не J6-центр)."""
-    from fk import fk_chain as _fk
     g = solve_position(*w, dh)
     if g is None:
         g = solve_position(*w, dh, clamped=True)
@@ -79,7 +78,7 @@ def seed_arm(w, dh):
     jt = w
     for _ in range(3):
         q1, q2, q3 = g
-        r = _fk([q1, q2, q3, 0.0, 0.0, 0.0], dh, finger=0.0)
+        r = fk_chain([q1, q2, q3, 0.0, 0.0, 0.0], dh, finger=0.0)
         J4 = r["joints"][3]
         O6s = r["joints"][6]
         jt = (w[0] - (O6s[0] - J4[0]),
@@ -94,8 +93,9 @@ def seed_arm(w, dh):
     return g, jt
 
 
-def solve_orientation(A, B, C, q1, q2, q3, dh):
-    R06 = euler_to_matrix(A, B, C)
+def solve_orientation(A, B, C, q1, q2, q3, dh, R06=None):
+    if R06 is None:
+        R06 = euler_to_matrix(A, B, C)
     T = t03(q1, q2, q3, dh)
     # R36 = R03^T * R06
     R36 = [0.0] * 16
@@ -117,7 +117,7 @@ def solve_all(pos, euler, dh, finger=FINGER):
     g, jt = seed_arm(w, dh)
     if g is not None:
         q1, q2, q3 = g
-        q4, q5, q6 = solve_orientation(A, B, C, q1, q2, q3, dh)
+        q4, q5, q6 = solve_orientation(A, B, C, q1, q2, q3, dh, R06=R06)
         seeds.append([clamp_angle(i, v) for i, v in enumerate((q1, q2, q3, q4, q5, q6))])
         # elbow up (на компенсированной цели jt)
         q3u = -q3
@@ -127,14 +127,14 @@ def solve_all(pos, euler, dh, finger=FINGER):
         L1, L2 = dh[1][0], dh[2][0]
         q2u = math.degrees(math.atan2(s, r) - math.atan2(L2 * math.sin(q3r),
                                                         L1 + L2 * math.cos(q3r))) - dh[1][3]
-        q4, q5, q6 = solve_orientation(A, B, C, q1, q2u, q3u, dh)
+        q4, q5, q6 = solve_orientation(A, B, C, q1, q2u, q3u, dh, R06=R06)
         seeds.append([clamp_angle(i, v) for i, v in enumerate((q1, q2u, q3u, q4, q5, q6))])
     # + сид «нули» (центральная конфигурация — сильная ветвь для верхней полусферы)
     seeds.append([0.0] * 6)
     out = []
     for sd in seeds:
         meta = {}
-        q, conv = refine(pos, euler, sd, dh, finger, meta=meta)
+        q, conv = refine(pos, euler, sd, dh, finger, meta=meta, Rt=R06)
         p2, e2 = fk_pose(q, dh, finger)
         dp = math.dist(pos, p2)
         do = math.dist(euler, e2)

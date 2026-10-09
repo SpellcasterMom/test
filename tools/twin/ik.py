@@ -97,9 +97,12 @@ def ik_error(qrad, Rt, pt, dh, finger):
             ex * ORI_W, ey * ORI_W, ez * ORI_W]
 
 
-def refine(target_pos, target_euler, q_seed, dh, finger=105.0, meta=None):
-    """DLS-доводка seed'а. Возвращает (q_out[6], converged). q_seed: градусы."""
-    Rt = euler_to_matrix(*target_euler)
+def refine(target_pos, target_euler, q_seed, dh, finger=105.0, meta=None, Rt=None):
+    """DLS-доводка seed'а. Возвращает (q_out[6], converged). q_seed: градусы.
+    Rt — готовая матрица цели (зеркало solveOrientationM/refineSolutionM:
+    solve_all считает один раз на цель, а не на каждый сид)."""
+    if Rt is None:
+        Rt = euler_to_matrix(*target_euler)
     pt = target_pos
     qr = [math.radians(clamp_angle(i, q_seed[i])) for i in range(6)]
     qmin = [math.radians(SERVO_LIMITS[i][0]) for i in range(6)]
