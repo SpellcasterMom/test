@@ -220,6 +220,10 @@ bool SafetyChecker::checkLinkSafety(const Vec3 &jointA, const Vec3 &jointB, int 
 
     // Количество точек для сэмплирования вдоль звена
     const int SAMPLES = 5;
+    // Квадраты порогов: в горячем пути сравниваем reach2 без sqrt
+    // (sqrt — только в редкой ветке отказа, для текста ошибки).
+    const float maxR2 = linkSafety.maxReach * linkSafety.maxReach;
+    const float minR2 = linkSafety.minReach * linkSafety.minReach;
     for (int s = 0; s <= SAMPLES; s++) {
         float t = (float)s / SAMPLES;
         Vec3 point = sampleOnLink(jointA, jointB, t);
@@ -240,13 +244,16 @@ bool SafetyChecker::checkLinkSafety(const Vec3 &jointA, const Vec3 &jointB, int 
         }
 
         // Проверка 3: цилиндрический радиус дотягивания (расстояние от оси Z основания)
-        float reachXY = sqrt(point.x * point.x + point.y * point.y);
-        if (reachXY > linkSafety.maxReach) {
+        // Сравнение в квадратах — без sqrt; корень только для текста отказа.
+        const float reach2 = point.x * point.x + point.y * point.y;
+        if (reach2 > maxR2) {
+            float reachXY = sqrt(reach2);
             lastError = "Link " + String(linkIdx) +
                         " reach=" + String(reachXY, 1) + " > MAX=" + String(linkSafety.maxReach, 1);
             return false;
         }
-        if (reachXY < linkSafety.minReach) {
+        if (reach2 < minR2) {
+            float reachXY = sqrt(reach2);
             lastError = "Link " + String(linkIdx) +
                         " reach=" + String(reachXY, 1) + " < MIN=" + String(linkSafety.minReach, 1);
             return false;
@@ -320,14 +327,19 @@ bool SafetyChecker::checkAllLinks(const float q[6]) {
     // оба конца зафиксированы всегда, считать её столкновение со столом
     // бессмысленно; заодно ~1/7 времени safety и никаких ложных FAIL'ов базы).
     // Проверка радиуса для сочленений (1-6) ниже — без изменений.
+    // Квадраты порогов: в горячем пути без sqrt, корень — только в текст отказа.
+    const float maxR2 = linkSafety.maxReach * linkSafety.maxReach;
+    const float minR2 = linkSafety.minReach * linkSafety.minReach;
     for (int i = 1; i <= 6; i++) {
-        float reachXY = sqrt(joints[i].x * joints[i].x + joints[i].y * joints[i].y);
-        if (reachXY > linkSafety.maxReach) {
+        const float reach2 = joints[i].x * joints[i].x + joints[i].y * joints[i].y;
+        if (reach2 > maxR2) {
+            float reachXY = sqrt(reach2);
             lastError = "Joint " + String(i) + " reach=" + String(reachXY, 1) +
                         " > MAX=" + String(linkSafety.maxReach, 1);
             return false;
         }
-        if (reachXY < linkSafety.minReach) {
+        if (reach2 < minR2) {
+            float reachXY = sqrt(reach2);
             lastError = "Joint " + String(i) + " reach=" + String(reachXY, 1) +
                         " < MIN=" + String(linkSafety.minReach, 1);
             return false;

@@ -183,6 +183,15 @@ public:
 
 private:
     EEPROMData data;  // Внутренний буфер для хранения прочитанных данных
+    // Кэш одного чтения: begin() грузит EEPROM один раз, все геттеры
+    // (isConfigValid/loadConfig/loadHome/getStoredFwVersion) идут из кэша.
+    // save*/clear() инвалидируют/обновляют кэш. Поведение то же, чтений меньше.
+    bool cacheReady = false;  // кэш загружен (EEPROM.get уже был)
+    bool cacheValid = false;  // закэшированные данные прошли validateData()
+
+    // Догрузить кэш при первом обращении (если begin() ещё не вызывался
+    // или порядок вызовов иной). Повторных EEPROM.get не делает.
+    void ensureCache();
 
     /**
      * calculateChecksum — Вычисление контрольной суммы структуры EEPROMData.
