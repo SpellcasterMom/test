@@ -46,6 +46,7 @@ void ServoController::init() {
     for (int i = 0; i < 7; i++) {
         configs[i] = DEFAULT_CONFIG.servos[i];
     }
+    refreshPwmCache();
 }
 
 /**
@@ -60,14 +61,59 @@ void ServoController::init() {
  *   - homeOffset          — сдвиг math → servo (135° / 90° / 0°)
  *
  * minAngle/maxAngle — в МАТЕМАТИЧЕСКОМ диапазоне (-135..+135, -90..+90,
- * 0..100). homeOffset прибавляется внутри setAngle()
- * и angleToMicroseconds()
+ * 0..100). homeOffset прибавляется внутри computePulseUs()
  * перед конвертацией в PWM.
  */
 void ServoController::setConfig(const ServoConfig configs[7]) {
     for (int i = 0; i < 7; i++) {
         this->configs[i] = configs[i];
     }
+    refreshPwmCache();
+}
+
+/**
+ * refreshPwmCache — предрасчёт констант цепочки q_math → PWM.
+ * Вызывается из init()/setConfig() (единственные места смены конфига).
+ * Формулы — те же операции в том же порядке, что в setAngle(),
+ * поэтому результат бит-в-бит совпадает с посчитанным на лету.
+ */
+void ServoController::refreshPwmCache() {
+    for (int i = 0; i < 7; i++) {
+        corrK[i] = configs[i].correctionFactor / 100.0f;
+        servoMinA[i] = (float)configs[i].minAngle + configs[i].homeOffset;
+        servoMaxA[i] = (float)configs[i].maxAngle + configs[i].homeOffset;
+    }
+}
+
+/**
+ * computePulseUs — чистая математика q_math → мкс (см. .h).
+ * Деление (maxPWM−minPWM)/(servoMax−servoMin) оставлено как было —
+ * замена на предрасчитанный множитель могла бы сдвинуть младший бит
+ * после (uint16_t)-обрезки; экономия 350 дел/с того не стоит.
+ */
+uint16_t ServoController::computePulseUs(int servoId, float qmath) {
+    // ШАГ 0: math → servo (прибавляем home offset).
+    float servoAngle = qmath + configs[servoId].homeOffset;
+
+    // ШАГ 1: корректирующий множитель (из кэша).
+    float correctedAngle = servoAngle * corrK[servoId];
+
+    // ШАГ 2: инверсия относительно центра серво-диапазона (см. доку setAngle).
+    if (configs[servoId].isInverted) {
+        correctedAngle = (servoMinA[servoId] + servoMaxA[servoId]) - correctedAngle;
+    }
+
+    // ШАГ 3: clamp в серво-диапазоне.
+    correctedAngle = constrain(correctedAngle, servoMinA[servoId], servoMaxA[servoId]);
+
+    // ШАГ 4: линейная интерполяция в микросекунды (внутри computePulseUs).
+    float minPWM = configs[servoId].minPWM;
+    float maxPWM = configs[servoId].maxPWM;
+    float pulse = minPWM + (correctedAngle - servoMinA[servoId]) * (maxPWM - minPWM)
+                           / (servoMaxA[servoId] - servoMinA[servoId]);
+    pulse = constrain(pulse, (float)minPWM, (float)maxPWM);
+
+    return (uint16_t)pulse;
 }
 
 /**
@@ -97,7 +143,7 @@ void ServoController::setConfig(const ServoConfig configs[7]) {
  *    constrain(correctedAngle, minAngle+homeOffset, maxAngle+homeOffset)
  *    — в СЕРВО-диапазоне (после offset).
  *
- * 5. КОНВЕРТАЦИЯ В PWM: angleToMicroseconds() → микросекунды.
+ * 5. КОНВЕРТАЦИЯ В PWM: computePulseUs() → микросекунды.
  *
  * 6. ЗАПИСЬ В PCA9685: setChannelServoPulseDuration(channel, мкс).
  *
@@ -113,40 +159,10 @@ void ServoController::setAngle(int servoId, float angle) {
     // Сервоприводы отключены — игнорируем команду
     if (!enabled) return;
 
-    // ШАГ 0: math → servo (прибавляем home offset).
-    // Пример: q_math = 0 → servoAngle = 135° (P1) или 90° (P4).
-    float servoAngle = angle + configs[servoId].homeOffset;
+    // Вся математика q_math → мкс — в общем моторе (бит-в-бит как раньше).
+    uint16_t pulseUs = computePulseUs(servoId, angle);
 
-    // ШАГ 1: применение корректирующего множителя.
-    // correctionFactor = 100.0 → без коррекции
-    // correctionFactor = 105.0 → угол увеличивается на 5%
-    float correction = configs[servoId].correctionFactor / 100.0f;
-    float correctedAngle = servoAngle * correction;
-
-    // ШАГ 2: инвертирование направления для зеркально установленных серво.
-    // Зеркалим относительно ЦЕНТРА серво-диапазона, а не через минус:
-    // наивное -(q+off) с последующим clamp ломает всё (P1: q=0 → -135 → 0
-    // вместо 135; края ±135 тоже схлопываются в 0). Правильно:
-    // phys = (servoMin+servoMax) - (q+off): центр стоит, края меняются.
-    // P1: q=0 → 135 ✓, q=+135 → 0, q=-135 → 270 ✓.
-    // P7 (off=0, [0,100]): q → 100-q ✓.
-    float servoMin = (float)configs[servoId].minAngle + configs[servoId].homeOffset;
-    float servoMax = (float)configs[servoId].maxAngle + configs[servoId].homeOffset;
-    if (configs[servoId].isInverted) {
-        correctedAngle = (servoMin + servoMax) - correctedAngle;
-    }
-
-    // ШАГ 3: ограничение угла в СЕРВО-диапазоне (после offset).
-    // minAngle/maxAngle в config.h — математические, поэтому здесь
-    // смещаем границы на homeOffset для получения фактического
-    // физического диапазона сервы.
-    correctedAngle = constrain(correctedAngle, servoMin, servoMax);
-
-    // ШАГ 4: конвертация угла в ширину импульса (микросекунды).
-    // angleToMicroseconds() также смещает границы на homeOffset внутри.
-    uint16_t pulseUs = angleToMicroseconds(servoId, correctedAngle);
-
-    // ШАГ 5: запись ширины импульса в канал PCA9685 (janelia берёт мкс).
+    // Запись ширины импульса в канал PCA9685 (janelia берёт мкс).
     // Каналы 0–5 — сервоприводы 6DOF, канал 6 — захватчик.
     // Шина I2C общая с GY-80: сериализуем с IMU-задачей (Core 1).
     // Брать мьютекс — с ТАЙМАУТОМ, не вечно: если шина клинит (просадка
@@ -174,14 +190,41 @@ void ServoController::setAngle(int servoId, float angle) {
 
 /**
  * Последовательная установка углов для всех 7 сервоприводов.
- * Просто вызывает setAngle() для каждого индекса 0–6.
- * Углы применяются последовательно, что важно для kinematic chain.
+ *
+ * Пакетный путь интерполятора (шаг 20 мс): математика всех 7 каналов
+ * считается без I2C, затем ОДИН take мьютекса на 7 записей (раньше —
+ * 7 take/give с таймаутом 100 мс каждый). Не взяли мьютекс — пропускаем
+ * все 7 записей разом, currentAngles всё равно обновляются (как раньше
+ * при пропуске одиночного шага). Поведение вовне то же.
  *
  * @param angles — структура с МАТЕМАТИЧЕСКИМИ углами всех серво
  */
 void ServoController::setAngles(const JointAngles &angles) {
+    if (!enabled) return;
+
+    uint16_t pulse[7];
     for (int i = 0; i < 7; i++) {
-        setAngle(i, angles.angles[i]);
+        pulse[i] = computePulseUs(i, angles.angles[i]);
+    }
+
+    if (pca9685Available) {
+        extern SemaphoreHandle_t i2cMutex;
+        bool i2cLocked = false;
+        if (i2cMutex) {
+            i2cLocked = (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(100)) == pdTRUE);
+        } else {
+            i2cLocked = true;
+        }
+        if (i2cLocked) {
+            for (int i = 0; i < 7; i++) {
+                pwm.setChannelServoPulseDuration((uint16_t)i, pulse[i]);
+            }
+            if (i2cMutex) xSemaphoreGive(i2cMutex);
+        }
+    }
+
+    for (int i = 0; i < 7; i++) {
+        currentAngles.angles[i] = angles.angles[i];
     }
 }
 
@@ -224,29 +267,4 @@ void ServoController::disable() {
             pwm.setChannelDutyCycle((uint16_t)i, 0);
         }
     }
-}
-
-/**
- * Конвертация СЕРВО-угла (градусы) в ширину импульса (микросекунды).
- * Дальше ширина пишется в драйвер напрямую
- * (janelia: setChannelServoPulseDuration).
- */
-uint16_t ServoController::angleToMicroseconds(int servoId, float angle) {
-    // Извлечение параметров сервопривода из конфигурации
-    float minPWM = configs[servoId].minPWM;
-    float maxPWM = configs[servoId].maxPWM;
-
-    // ВАЖНО: angle приходит как СЕРВО-угол (после offset),
-    // поэтому границы тоже смещаем на homeOffset.
-    float servoMinAngle = (float)configs[servoId].minAngle + configs[servoId].homeOffset;
-    float servoMaxAngle = (float)configs[servoId].maxAngle + configs[servoId].homeOffset;
-
-    // Линейная интерполяция: СЕРВО-угол → ширина импульса в микросекундах.
-    // Дальше janelia-библиотека берёт микросекунды напрямую
-    // (setChannelServoPulseDuration) — тики считать не нужно.
-    float pulse = minPWM + (angle - servoMinAngle) * (maxPWM - minPWM)
-                          / (servoMaxAngle - servoMinAngle);
-    pulse = constrain(pulse, (float)minPWM, (float)maxPWM);
-
-    return (uint16_t)pulse;
 }
