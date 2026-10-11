@@ -85,6 +85,10 @@ IKSolver::IKSolver() {
     for (int i = 0; i < 7; i++) {
         servoLimits[i] = DEFAULT_CONFIG.servos[i];
     }
+    for (int i = 0; i < 6; i++) {
+        qminRad[i] = servoLimits[i].minAngle * DEG_TO_RAD;
+        qmaxRad[i] = servoLimits[i].maxAngle * DEG_TO_RAD;
+    }
     // Длина пальца (для смещения TCP → запястье)
     fingerLength = GRIPPER_FINGER_LENGTH;
     // Параметры численного решателя по умолчанию
@@ -133,6 +137,10 @@ void IKSolver::setLinkLengths(const int lengths[6]) {
 void IKSolver::setServoLimits(const ServoConfig servos[7]) {
     for (int i = 0; i < 7; i++)
         servoLimits[i] = servos[i];
+    for (int i = 0; i < 6; i++) {
+        qminRad[i] = servoLimits[i].minAngle * DEG_TO_RAD;
+        qmaxRad[i] = servoLimits[i].maxAngle * DEG_TO_RAD;
+    }
 }
 
 /**
@@ -170,34 +178,16 @@ void IKSolver::syncFk() {
 // ============================================================================
 
 /**
- * Транспонирование матрицы 4×4.
- *
- * Для ортогональных матриц поворота транспонирование эквивалентно
- * обратной матрице: R⁻¹ = Rᵀ. Используется в solveOrientation()
- * для вычисления R03ᵀ при расчёте R36 = R03ᵀ · R06.
+ * R36 = R03ᵀ · R06 по блоку 3×3: 27 умножений вместо полного 4×4
+ * (64 + транспонирование). Остальное в R36 — как раньше: единичная база + [3][3]=1.
  */
-Mat4 IKSolver::matTranspose(const Mat4 &m) {
-    Mat4 r;
-    for (int i = 0; i < 4; i++)
-        for (int j = 0; j < 4; j++)
-            r.m[i][j] = m.m[j][i];
-    return r;
-}
-
-/**
- * Умножение двух матриц 4×4: r = a · b.
- *
- * Используется для:
- *   - Вычисления произведения DH-матриц: T03 = T01 · T12 · T23
- *   - Вычисления R36 = R03ᵀ · R06
- */
-Mat4 IKSolver::matMultiply(const Mat4 &a, const Mat4 &b) {
-    Mat4 r;
-    for (int i = 0; i < 4; i++)
-        for (int j = 0; j < 4; j++)
-            for (int k = 0; k < 4; k++)
-                r.m[i][j] += a.m[i][k] * b.m[k][j];
-    return r;
+void IKSolver::matMul3x3T(const Mat4 &R03, const Mat4 &R06, Mat4 &R36) {
+    R36 = Mat4::identity();
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            R36.m[i][j] = R03.m[0][i] * R06.m[0][j]
+                        + R03.m[1][i] * R06.m[1][j]
+                        + R03.m[2][i] * R06.m[2][j];
 }
 
 // ============================================================================
@@ -317,8 +307,8 @@ bool IKSolver::solve(const Pose &target, JointAngles &result) {
     // ================================================================
     // ЭТАП 2: Решение задачи ориентации (суставы 4–6)
     // ================================================================
-    solveOrientation(target.orientation.x, target.orientation.y, target.orientation.z,
-                     q1, q2, q3, q4, q5, q6);
+    // Rt уже посчитана выше — матричное ядро без повторного eulerToMatrix.
+    solveOrientationM(R06, q1, q2, q3, q4, q5, q6);
 
     // ================================================================
     // ПОСТ-ОБРАБОТКА: Ограничение углов механическими пределами
@@ -331,8 +321,9 @@ bool IKSolver::solve(const Pose &target, JointAngles &result) {
     result.angles[5] = clampAngle(5, q6);  // запястье (roll)
     result.angles[6] = 0;                  // захват управляется отдельно
 
-    // ЭТАП 3: доводка по полной цепочке (см. refineSolution)
-    refineSolution(target, result, nullptr);
+    // ЭТАП 3: доводка по полной цепочке — матричное ядро напрямую
+    // (обёртка refineSolution пересчитала бы eulerToMatrix ещё раз).
+    refineSolutionM(target.position, R06, result, nullptr);
 
     return true;
 }
@@ -352,60 +343,7 @@ bool IKSolver::solve(const Pose &target, JointAngles &result) {
  * пальца из целевого TCP.
  */
 bool IKSolver::solvePosition(float x, float y, float z, float &q1, float &q2, float &q3) {
-    // DH-параметры основания
-    float d0 = d[0];  // высота основания (мм) — смещение вдоль оси Z
-    float a0 = a[0];  // смещение основания (мм) — длина звена основания
-
-    // ==================================================================
-    // ШАГ 1: Угол поворота основания (q1)
-    // ==================================================================
-    q1 = atan2(y, x);
-
-    // ==================================================================
-    // ШАГ 2: Проекция на 2D-плоскость (r, s)
-    // ==================================================================
-    float r = sqrt(x * x + y * y) - a0;
-    float s = z - d0;
-
-    // ==================================================================
-    // ШАГ 3: Длины звеньев двухзвенного манипулятора
-    // ==================================================================
-    float L1 = a[1];  // плечо — локоть
-    float L2 = a[2];  // локоть — запястье
-
-    float dist = sqrt(r * r + s * s);
-
-    // ==================================================================
-    // ШАГ 4: Проверка достижимости
-    // ==================================================================
-    if (dist > (L1 + L2)) return false;      // слишком далеко
-    if (dist < fabs(L1 - L2)) return false;  // слишком близко
-
-    // ==================================================================
-    // ШАГ 5: Угол локтя (q3) по теореме косинусов
-    // ==================================================================
-    float cosQ3 = (r * r + s * s - L1 * L1 - L2 * L2) / (2.0f * L1 * L2);
-    cosQ3 = constrain(cosQ3, -1.0f, 1.0f);
-    q3 = -acos(cosQ3);   // «elbow down» — q3 < 0
-
-    // ==================================================================
-    // ШАГ 6: Угол плеча (q2)
-    // ==================================================================
-    float sinQ3 = sin(q3);
-    float C = L1 + L2 * cosQ3;
-    float S = L2 * sinQ3;
-    q2 = atan2(s, r) - atan2(S, C);
-
-    // ==================================================================
-    // ШАГ 7: Перевод из радиан в градусы + ноль плеча
-    // ====================================================================
-    // Геометрия выше считает q2 от ГОРИЗОНТАЛИ (DH-кадр), а математический
-    // ноль плеча — ВЕРТИКАЛЬ: q2_math = q2_DH − thetaOff[J2].
-    q1 = q1 * RAD_TO_DEG;
-    q2 = q2 * RAD_TO_DEG - thetaOff[1];
-    q3 = q3 * RAD_TO_DEG;
-
-    return true;
+    return solveArm(x, y, z, false, q1, q2, q3);
 }
 
 // ============================================================================
@@ -417,6 +355,15 @@ bool IKSolver::solvePosition(float x, float y, float z, float &q1, float &q2, fl
  * в достижимое кольцо [|L1−L2|, L1+L2]. Двойник: solve.py solve_position(clamped).
  */
 bool IKSolver::solvePositionClamped(float x, float y, float z, float &q1, float &q2, float &q3) {
+    return solveArm(x, y, z, true, q1, q2, q3);
+}
+
+/**
+ * Общий мотор solvePosition/solvePositionClamped (см. .h).
+ * Шаги 1–3, 5–7 идентичны; разница только в шаге 4: отказ vs зажатие (r,s).
+ */
+bool IKSolver::solveArm(float x, float y, float z, bool clamped,
+                         float &q1, float &q2, float &q3) {
     float d0 = d[0];
     float a0 = a[0];
 
@@ -430,6 +377,7 @@ bool IKSolver::solvePositionClamped(float x, float y, float z, float &q1, float 
 
     float dist = sqrt(r * r + s * s);
     if (dist > (L1 + L2) || dist < fabs(L1 - L2)) {
+        if (!clamped) return false;      // строгий путь: отказ (isReachable/solve)
         if (dist < 1e-9f) return false;
         float lo = fabs(L1 - L2) + 1e-3f;
         float hi = (L1 + L2) - 1e-3f;
@@ -471,10 +419,14 @@ bool IKSolver::seedArm(float wx, float wy, float wz,
     float qq[6] = {0, 0, 0, 0, 0, 0};
     for (int it = 0; it < 3; it++) {
         qq[0] = q1; qq[1] = q2; qq[2] = q3;
-        // Сустав 3 в getJointPosition = J4 (конец звеньев 165+161),
-        // сустав 6 = фланец O6 (кончик кинематической цепочки без пальца).
-        Vec3 pJ4 = fkSolver.getJointPosition(qq, 3);
-        Vec3 pO6 = fkSolver.getJointPosition(qq, 6);
+        // Сустав 3 в joints = J4 (конец звеньев 165+161),
+        // сустав 6 = фланец O6 — один проход вместо двух getJointPosition.
+        Vec3 joints[7], tcp, fdir;
+        Mat4 T06;
+        fkSolver.getPose(qq, joints, tcp, fdir, T06);
+        (void)tcp; (void)fdir; (void)T06;
+        Vec3 pJ4 = joints[3];
+        Vec3 pO6 = joints[6];
         jx = wx - (pO6.x - pJ4.x);
         jy = wy - (pO6.y - pJ4.y);
         jz = wz - (pO6.z - pJ4.z);
@@ -503,6 +455,16 @@ bool IKSolver::seedArm(float wx, float wy, float wz,
 bool IKSolver::solveOrientation(float A, float B, float C,
                                  float q1, float q2, float q3,
                                  float &q4, float &q5, float &q6) {
+    // Обёртка: один перевод эйлеры→матрица, дальше матричное ядро.
+    Mat4 Rt = eulerToMatrix(A * DEG_TO_RAD, B * DEG_TO_RAD, C * DEG_TO_RAD);
+    return solveOrientationM(Rt, q1, q2, q3, q4, q5, q6);
+}
+
+/**
+ * Ядро solveOrientation по готовой Rt (см. .h): R03 из FK, R36 3×3, декомпозиция.
+ */
+bool IKSolver::solveOrientationM(const Mat4 &Rt, float q1, float q2, float q3,
+                                 float &q4, float &q5, float &q6) {
     // T03 через общий FK-движок: учитывает theta_offset и полные DH
     // (вручную собранные T01/T12/T23 их игнорировали и дублировали FK).
     // q1..q3 здесь МАТЕМАТИЧЕСКИЕ (градусы), офсеты добавит computeFK.
@@ -516,15 +478,10 @@ bool IKSolver::solveOrientation(float A, float B, float C,
             R03.m[i][j] = T03.m[i][j];
 
     // --------------------------------------------------
-    // R06 из целевой ориентации
+    // R36 = R03ᵀ · Rt (3×3, без 4×4-накладных)
     // --------------------------------------------------
-    Mat4 R06 = eulerToMatrix(A * DEG_TO_RAD, B * DEG_TO_RAD, C * DEG_TO_RAD);
-
-    // --------------------------------------------------
-    // R36 = R03ᵀ · R06
-    // --------------------------------------------------
-    Mat4 R03T = matTranspose(R03);
-    Mat4 R36 = matMultiply(R03T, R06);
+    Mat4 R36;
+    matMul3x3T(R03, Rt, R36);
 
     // --------------------------------------------------
     // Декомпозиция R36 → q4, q5, q6
@@ -585,7 +542,8 @@ int IKSolver::solveAll(const Pose &target, JointAngles solutions[4],
     int count = 0;
     float q1, q2, q3, q4, q5, q6;
 
-    // === Коррекция TCP → запястье ===
+    // === Коррекция TCP → запястье (Rt считается ОДИН раз на цель;
+    // сиды ниже переиспользуют её через solveOrientationM/refineSolutionM) ===
     Mat4 R06 = eulerToMatrix(target.orientation.x * DEG_TO_RAD,
                              target.orientation.y * DEG_TO_RAD,
                              target.orientation.z * DEG_TO_RAD);
@@ -603,10 +561,9 @@ int IKSolver::solveAll(const Pose &target, JointAngles solutions[4],
     // seedArm() итеративно переносит цель на J4. DH при этом НЕ трогаем.
     float q1c, q2c, q3c, jx, jy, jz;
     if (seedArm(wx, wy, wz, q1c, q2c, q3c, jx, jy, jz)) {
-        // --- Решение 1: elbow down ---
+        // --- Решение 1: elbow down (Rt уже готова — без повторного eulerToMatrix) ---
         q1 = q1c; q2 = q2c; q3 = q3c;
-        solveOrientation(target.orientation.x, target.orientation.y, target.orientation.z,
-                         q1, q2, q3, q4, q5, q6);
+        solveOrientationM(R06, q1, q2, q3, q4, q5, q6);
         solutions[count].setAll(
             clampAngle(0, q1), clampAngle(1, q2), clampAngle(2, q3),
             clampAngle(3, q4), clampAngle(4, q5), clampAngle(5, q6),
@@ -626,8 +583,7 @@ int IKSolver::solveAll(const Pose &target, JointAngles solutions[4],
         float q2rad = atan2(s, r) - atan2(L2 * sin(q3rad), L1 + L2 * cos(q3rad));
         q2 = q2rad * RAD_TO_DEG - thetaOff[1];   // в градусы + ноль плеча
 
-        solveOrientation(target.orientation.x, target.orientation.y, target.orientation.z,
-                         q1, q2, q3, q4, q5, q6);
+        solveOrientationM(R06, q1, q2, q3, q4, q5, q6);
         solutions[count].setAll(
             clampAngle(0, q1), clampAngle(1, q2), clampAngle(2, q3),
             clampAngle(3, q4), clampAngle(4, q5), clampAngle(5, q6),
@@ -651,9 +607,10 @@ int IKSolver::solveAll(const Pose &target, JointAngles solutions[4],
     // ================================================================
     // Запястье НЕ сферическое (J4→O6 ~107 мм по чертежу robot1),
     // поэтому геометрические решения доводим по полной FK-цепочке. Seed'ы уже в solutions[].
+    // Матричное ядро напрямую: обёртка refineSolution пересчитала бы Rt ещё раз на сид.
     for (int i = 0; i < count; i++) {
         IKSolutionMeta m;
-        refineSolution(target, solutions[i], &m);
+        refineSolutionM(target.position, R06, solutions[i], &m);
         if (meta) meta[i] = m;
     }
 
@@ -691,11 +648,18 @@ float IKSolver::clampAngle(int servoId, float angle) {
  *   к ложному минимуму «вверх ногами»).
  */
 void IKSolver::ikError(const float qrad[6], const Mat4 &Rt, const Vec3 &pt, float e[6]) {
-    float qdeg[6];
-    for (int i = 0; i < 6; i++) qdeg[i] = qrad[i] * RAD_TO_DEG;
-
-    Vec3 p = fkSolver.getEndEffector(qdeg);
-    Mat4 R = fkSolver.getRotationMatrix(qdeg, 5);
+    // q уже в радианах — однопроходная поза без кругового перевода рад→град→рад.
+    Vec3 joints[7];
+    Vec3 p, fdir;
+    Mat4 T06;
+    fkSolver.getPoseRad(qrad, joints, p, fdir, T06);
+    (void)joints;
+    (void)fdir;
+    // R06 — верхний левый 3×3 из T06 (getRotationMatrix(q,5) давал то же).
+    Mat4 R = Mat4::identity();
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            R.m[i][j] = T06.m[i][j];
 
     e[0] = pt.x - p.x;
     e[1] = pt.y - p.y;
@@ -802,23 +766,27 @@ bool IKSolver::refineSolutionM(const Vec3 &pt, const Mat4 &Rt,
                                JointAngles &q, IKSolutionMeta *meta) {
     if (meta) { meta->iters = 0; meta->converged = false; meta->dbgDq0 = -1; meta->dbgN1 = -1; }
 
-    float qr[6], qmin[6], qmax[6];
+    float qr[6];
+    // Лимиты в радианах — из кэша setServoLimits (без 12 mults на вызов).
+    const float *qmin = qminRad;
+    const float *qmax = qmaxRad;
     for (int i = 0; i < 6; i++) {
         qr[i] = clampAngle(i, q.angles[i]) * DEG_TO_RAD;
-        qmin[i] = servoLimits[i].minAngle * DEG_TO_RAD;
-        qmax[i] = servoLimits[i].maxAngle * DEG_TO_RAD;
     }
 
     float e[6];
     ikError(qr, Rt, pt, e);
 
-    float bestQr[6], bestN = 0;
+    // Нормы держим в КВАДРАТАХ (сравнения nn < enorm эквивалентны,
+    // sqrt — только для meta-диагностики). Было 2 sqrt/итерацию + до 10 в line search.
+    float bestQr[6], bestN2 = 0;
     for (int k = 0; k < 6; k++) bestQr[k] = qr[k];
-    for (int i = 0; i < 6; i++) bestN += e[i] * e[i];
-    bestN = sqrt(bestN);
+    for (int i = 0; i < 6; i++) bestN2 += e[i] * e[i];
 
     float tolOriW = numTolOri * DEG_TO_RAD * NLS_ORI_W;
-    float enorm = bestN;
+    float tolPos2 = numTolPos * numTolPos;
+    float tolOriW2 = tolOriW * tolOriW;
+    float enorm2 = bestN2;
 
     // Расхождение seed'а для диагностики (M115 покажет seed → best)
     if (meta) {
@@ -833,17 +801,19 @@ bool IKSolver::refineSolutionM(const Vec3 &pt, const Mat4 &Rt,
     bool converged = false;
     int it = 0, stall = 0;
     for (it = 0; it < numMaxIter; it++) {
-        float ep = sqrt(e[0]*e[0] + e[1]*e[1] + e[2]*e[2]);
-        float eo = sqrt(e[3]*e[3] + e[4]*e[4] + e[5]*e[5]);
-        if (ep <= numTolPos && eo <= tolOriW) { converged = true; break; }
+        float ep2 = e[0]*e[0] + e[1]*e[1] + e[2]*e[2];
+        float eo2 = e[3]*e[3] + e[4]*e[4] + e[5]*e[5];
+        if (ep2 <= tolPos2 && eo2 <= tolOriW2) { converged = true; break; }
 
         // Численный якобиан: столбец j = (e(q+δj) − e(q)) / δ
+        // (× invDelta вместо деления — 36 делений/итерацию убраны).
+        static const float INV_DELTA = 1.0f / NLS_DELTA;
         float J[6][6], e2[6], qp[6];
         for (int j = 0; j < 6; j++) {
             for (int k = 0; k < 6; k++) qp[k] = qr[k];
             qp[j] += NLS_DELTA;
             ikError(qp, Rt, pt, e2);
-            for (int i = 0; i < 6; i++) J[i][j] = (e2[i] - e[i]) / NLS_DELTA;
+            for (int i = 0; i < 6; i++) J[i][j] = (e2[i] - e[i]) * INV_DELTA;
         }
 
         // DLS-направление: (J·Jᵀ + λ²I)·y = e ; dq = −Jᵀ·y.
@@ -896,18 +866,18 @@ bool IKSolver::refineSolutionM(const Vec3 &pt, const Mat4 &Rt,
 
         // Backtracking: пробуем полный шаг, половинки, ... — берём первый,
         // который строго уменьшил ошибку. Иначе — растим λ и повторяем.
+        // Сравнение в квадратах (nn2 < enorm2 ⟺ nn < enorm), sqrt — только в meta.
         float qtry[6], en[6];
-        float step = 1.0f, nn = enorm;
+        float step = 1.0f, nn2 = enorm2;
         bool improved = false;
         for (int ls = 0; ls < 10; ls++) {
             for (int k = 0; k < 6; k++)
                 qtry[k] = constrain(qr[k] + dq[k] * step, qmin[k], qmax[k]);
             ikError(qtry, Rt, pt, en);
-            nn = 0;
-            for (int i = 0; i < 6; i++) nn += en[i] * en[i];
-            nn = sqrt(nn);
-            if (ls == 0 && it == 0 && meta) meta->dbgN1 = nn;
-            if (nn < enorm) { improved = true; break; }
+            nn2 = 0;
+            for (int i = 0; i < 6; i++) nn2 += en[i] * en[i];
+            if (ls == 0 && it == 0 && meta) meta->dbgN1 = sqrt(nn2);
+            if (nn2 < enorm2) { improved = true; break; }
             step *= 0.5f;
         }
         if (!improved) {
@@ -919,11 +889,11 @@ bool IKSolver::refineSolutionM(const Vec3 &pt, const Mat4 &Rt,
         // Шаг принят
         for (int k = 0; k < 6; k++) qr[k] = qtry[k];
         for (int i = 0; i < 6; i++) e[i] = en[i];
-        enorm = nn;
+        enorm2 = nn2;
         lam = lam * 0.5f; if (lam < 1e-3f) lam = 1e-3f;
         stall = 0;
-        if (nn < bestN) {
-            bestN = nn;
+        if (nn2 < bestN2) {
+            bestN2 = nn2;
             for (int k = 0; k < 6; k++) bestQr[k] = qr[k];
         }
     }

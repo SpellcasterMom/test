@@ -61,6 +61,7 @@ FKSolver::FKSolver() {
         }
         linkLen[i] = LINK_LENGTHS[i];
     }
+    refreshTrigCache();
 }
 
 /**
@@ -76,6 +77,7 @@ void FKSolver::setDHParams(const float params[6][4]) {
     for (int i = 0; i < 6; i++)
         for (int j = 0; j < 4; j++)
             dh[i][j] = params[i][j];
+    refreshTrigCache();
 }
 
 /**
@@ -104,36 +106,32 @@ void FKSolver::setFingerLength(float len) {
 }
 
 /**
- * Построение матрицы DH-преобразования 4×4 для одного звена.
- *
- * Стандартная DH-формула (Denavit-Hartenberg):
- *
- *   T(a, α, d, θ) =
- *     | cos(θ)  -sin(θ)·cos(α)   sin(θ)·sin(α)   a·cos(θ) |
- *     | sin(θ)   cos(θ)·cos(α)  -cos(θ)·sin(α)   a·sin(θ) |
- *     |   0         sin(α)           cos(α)            d     |
- *     |   0           0                 0               1     |
- *
- * @param a     — длина звена [мм]
- * @param alpha — угол закручивания [радианы]
- * @param d     — смещение вдоль оси Z [мм]
- * @param theta — угол поворота [радианы]
- * @return Матрица 4×4 перехода от предыдущей СК к текущей.
+ * Кэш тригонометрии DH: вызывается из конструктора и setDHParams.
+ * alpha/off меняются только там, поэтому cos/sin(alpha) и off в радианах
+ * считаем один раз, а не на каждое звено каждого FK-прохода.
  */
-Mat4 FKSolver::dhTransform(float a, float alpha, float d, float theta) {
+void FKSolver::refreshTrigCache() {
+    for (int i = 0; i < 6; i++) {
+        offRad[i] = dh[i][3] * DEG_TO_RAD;
+        float al = dh[i][1] * DEG_TO_RAD;
+        calpha[i] = cos(al);
+        salpha[i] = sin(al);
+    }
+}
+
+/**
+ * DH-матрица звена i из готовых cos/sin(alpha) — та же формула, что dhTransform.
+ */
+Mat4 FKSolver::dhFast(float a, int i, float d, float theta) {
     float ct = cos(theta);
     float st = sin(theta);
-    float ca = cos(alpha);
-    float sa = sin(alpha);
+    float ca = calpha[i];
+    float sa = salpha[i];
 
     Mat4 t;
-    // Строка 0 (проекция на ось X новой СК)
     t.m[0][0] = ct;   t.m[0][1] = -st * ca;  t.m[0][2] =  st * sa;  t.m[0][3] = a * ct;
-    // Строка 1 (проекция на ось Y новой СК)
     t.m[1][0] = st;   t.m[1][1] =  ct * ca;  t.m[1][2] = -ct * sa;  t.m[1][3] = a * st;
-    // Строка 2 (проекция на ось Z новой СК)
     t.m[2][0] = 0;    t.m[2][1] =  sa;        t.m[2][2] =  ca;       t.m[2][3] = d;
-    // Строка 3 (однородные координаты)
     t.m[3][0] = 0;    t.m[3][1] =  0;         t.m[3][2] =  0;        t.m[3][3] = 1;
     return t;
 }
@@ -156,15 +154,67 @@ Mat4 FKSolver::computeFK(const float q[6], int upToJoint) {
     Mat4 T = Mat4::identity();
 
     for (int i = 0; i <= upToJoint && i < 6; i++) {
-        // Суммируем угол сочленения и начальный сдвиг, переводим в радианы
-        float theta = q[i] * DEG_TO_RAD + dh[i][3] * DEG_TO_RAD;
-        // Строим DH-матрицу для звена i (alpha уже в радианы)
-        Mat4 Ti = dhTransform(dh[i][0], dh[i][1] * DEG_TO_RAD, dh[i][2], theta);
+        // Суммируем угол сочленения и начальный сдвиг (сдвиг уже в радианах из кэша)
+        float theta = q[i] * DEG_TO_RAD + offRad[i];
+        // DH-матрица звена i (cos/sin(alpha) из кэша)
+        Mat4 Ti = dhFast(dh[i][0], i, dh[i][2], theta);
         // Накопление: текущая T умножается на Ti
         T = T * Ti;
     }
 
     return T;
+}
+
+/**
+ * Однопроходная цепочка: один проход по 6 DH-матрицам даёт и все
+ * позиции суставов, и накопленную T06. Все геттеры ниже — тонкие
+ * обёртки над ней (поведение то же, трансформов в разы меньше).
+ */
+void FKSolver::computeChain(const float q[6], Vec3 joints[7], Mat4 &T06) {
+    Mat4 T = Mat4::identity();
+    joints[0] = {0, 0, 0};
+    for (int i = 0; i < 6; i++) {
+        float theta = q[i] * DEG_TO_RAD + offRad[i];
+        Mat4 Ti = dhFast(dh[i][0], i, dh[i][2], theta);
+        T = T * Ti;
+        joints[i + 1] = T.getPosition();
+    }
+    T06 = T;
+}
+
+/**
+ * То же, но входные углы уже в радианах (численный IK держит q в радианах).
+ */
+void FKSolver::computeChainRad(const float qrad[6], Vec3 joints[7], Mat4 &T06) {
+    Mat4 T = Mat4::identity();
+    joints[0] = {0, 0, 0};
+    for (int i = 0; i < 6; i++) {
+        float theta = qrad[i] + offRad[i];
+        Mat4 Ti = dhFast(dh[i][0], i, dh[i][2], theta);
+        T = T * Ti;
+        joints[i + 1] = T.getPosition();
+    }
+    T06 = T;
+}
+
+/**
+ * Однопроходная поза: joints + TCP + направление пальца + T06.
+ */
+void FKSolver::getPose(const float q[6], Vec3 joints[7], Vec3 &tcp, Vec3 &fingerDir, Mat4 &T06) {
+    computeChain(q, joints, T06);
+    fingerDir = {T06.m[0][2], T06.m[1][2], T06.m[2][2]};
+    const Vec3 &wrist = joints[6];
+    tcp = wrist + fingerDir * fingerLength;
+}
+
+/**
+ * Однопроходная поза из радиан (путь refineSolutionM/ikError).
+ */
+void FKSolver::getPoseRad(const float qrad[6], Vec3 joints[7], Vec3 &tcp, Vec3 &fingerDir, Mat4 &T06) {
+    computeChainRad(qrad, joints, T06);
+    fingerDir = {T06.m[0][2], T06.m[1][2], T06.m[2][2]};
+    const Vec3 &wrist = joints[6];
+    tcp = wrist + fingerDir * fingerLength;
 }
 
 /**
@@ -178,8 +228,11 @@ Mat4 FKSolver::computeFK(const float q[6], int upToJoint) {
  */
 Vec3 FKSolver::getJointPosition(const float q[6], int joint) {
     if (joint <= 0) return {0, 0, 0};
-    Mat4 T = computeFK(q, joint - 1);
-    return T.getPosition();
+    if (joint > 6) joint = 6;
+    Vec3 joints[7];
+    Mat4 T06;
+    computeChain(q, joints, T06);
+    return joints[joint];
 }
 
 /**
@@ -192,10 +245,9 @@ Vec3 FKSolver::getJointPosition(const float q[6], int joint) {
  * @param joints — выходной массив из 7 Vec3.
  */
 void FKSolver::getAllJointPositions(const float q[6], Vec3 joints[7]) {
-    joints[0] = {0, 0, 0};  // база — начало координат
-    for (int i = 1; i <= 6; i++) {
-        joints[i] = getJointPosition(q, i);
-    }
+    Mat4 T06;
+    computeChain(q, joints, T06);
+    (void)T06;
 }
 
 /**
@@ -217,9 +269,11 @@ void FKSolver::getAllJointPositions(const float q[6], Vec3 joints[7]) {
  * @return Позиция кончика пальца {x, y, z} в мм (базовая СК).
  */
 Vec3 FKSolver::getEndEffector(const float q[6]) {
-    Vec3 wrist = getJointPosition(q, 6);       // в базовой СК
-    Vec3 dir   = getFingerDirection(q);         // в базовой СК (после фикса)
-    return wrist + dir * fingerLength;
+    Vec3 joints[7];
+    Vec3 tcp, dir;
+    Mat4 T06;
+    getPose(q, joints, tcp, dir, T06);
+    return tcp;
 }
 
 /**
@@ -248,9 +302,11 @@ Vec3 FKSolver::getEndEffector(const float q[6]) {
  * @return Единичный вектор направления выдвижения пальца (базовая СК).
  */
 Vec3 FKSolver::getFingerDirection(const float q[6]) {
-    // Полная матрица T06 = T01 · T12 · T23 · T34 · T45 · T56
-    // (upToJoint = 5 = индекс последнего звена в массиве 0..5)
-    Mat4 T06 = computeFK(q, 5);
+    // Ось Z из накопленной T06 — уже в базовой СК (см. getPose).
+    Vec3 joints[7];
+    Mat4 T06;
+    computeChain(q, joints, T06);
+    (void)joints;
 
     // Третий столбец матрицы вращения R06 — это ось Z 6-го звена
     // в координатах базовой СК. Единичный вектор (для матриц поворота).
@@ -284,8 +340,19 @@ Mat4 FKSolver::getTransform(const float q[6], int upToJoint) {
  * @return Матрица 4×4, содержащая матрицу вращения 3×3 в верхнем левом углу.
  */
 Mat4 FKSolver::getRotationMatrix(const float q[6], int upToJoint) {
-    Mat4 T = computeFK(q, upToJoint);
     Mat4 R = Mat4::identity();
+    if (upToJoint >= 5) {
+        // Горячий путь (ikError, moveToPose): берём R06 из однопроходной T06.
+        Vec3 joints[7];
+        Mat4 T06;
+        computeChain(q, joints, T06);
+        (void)joints;
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+                R.m[i][j] = T06.m[i][j];
+        return R;
+    }
+    Mat4 T = computeFK(q, upToJoint);
     // Копируем только верхний левый блок 3×3 (матрица вращения)
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 3; j++)

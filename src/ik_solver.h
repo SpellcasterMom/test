@@ -161,6 +161,10 @@ private:
     /* Ограничения углов сервоприводов (мин/макс для каждого из 7 каналов) */
     ServoConfig servoLimits[7];
 
+    /* Те же лимиты 0..5 в радианах (кэш для refineSolutionM, без 12 mults на вызов) */
+    float qminRad[6];
+    float qmaxRad[6];
+
     /* Длина пальца захвата (мм). Вычитается из TCP → запястье в solve(). */
     float fingerLength;
 
@@ -208,6 +212,14 @@ private:
     bool solvePosition(float x, float y, float z, float &q1, float &q2, float &q3);
 
     /**
+     * Общий мотор solvePosition/solvePositionClamped: геометрия руки
+     * по (r,s). clamped=false — отказ при недостижимости (isReachable/solve),
+     * clamped=true — зажать (r,s) в кольцо (сид для DLS).
+     */
+    bool solveArm(float x, float y, float z, bool clamped,
+                  float &q1, float &q2, float &q3);
+
+    /**
      * Зажатая версия solvePosition: вместо отказа (false) при недостижимости
      * возвращает решение с (r,s), зажатыми в достижимое кольцо
      * (рука максимально вытянута/сложена в сторону цели).
@@ -251,6 +263,14 @@ private:
                           float &q4, float &q5, float &q6);
 
     /**
+     * То же, но целевая ориентация уже в матрице Rt (посчитана один раз
+     * на цель в solve()/solveAll()). Экономит повторные eulerToMatrix
+     * (6 sin/cos каждый) на каждый сид.
+     */
+    bool solveOrientationM(const Mat4 &Rt, float q1, float q2, float q3,
+                           float &q4, float &q5, float &q6);
+
+    /**
      * Ограничение угла углами механических ограничений сервопривода.
      * Если угол выходит за пределы [minAngle, maxAngle], он обрезается
      * до ближайшей допустимой границы.
@@ -273,9 +293,6 @@ private:
      */
     void decomposeRotation(const Mat4 &R, float &q4, float &q5, float &q6);
 
-    /** Транспонирование матрицы 4×4: r[i][j] = m[j][i] */
-    Mat4 matTranspose(const Mat4 &m);
-
-    /** Умножение матриц 4×4: r = a · b (классический алгоритм тройного цикла) */
-    Mat4 matMultiply(const Mat4 &a, const Mat4 &b);
+    /** 3×3: R36 = R03ᵀ · R06 (только блок вращения, без 4×4-накладных) */
+    static void matMul3x3T(const Mat4 &R03, const Mat4 &R06, Mat4 &R36);
 };

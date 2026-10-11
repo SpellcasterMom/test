@@ -33,14 +33,10 @@ CLEAR = 30.0  # запас вокруг короба для via-точек
 
 
 def fk_all(q):
-    r = fk_chain(q, DH2, finger=0.0)
-    J = list(r["joints"])
-    T = [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
-    for i in range(6):
-        a, al, d, off = DH2[i]
-        T = mat_mul(T, dh_transform(a, al, d, q[i] + off))
-    tcp = (T[3] + T[2] * F, T[7] + T[6] * F, T[11] + T[10] * F)
-    return J, tcp
+    # Один проход fk_chain: joints + tcp сразу (раньше joints из fk_chain
+    # + второй полный проход по матрицам ради tcp — та же математика).
+    r = fk_chain(q, DH2, finger=F)
+    return list(r["joints"]), r["tcp"]
 
 
 def in_box(p, z):

@@ -95,6 +95,27 @@ public:
     void getAllJointPositions(const float q[6], Vec3 joints[7]);
 
     /**
+     * Однопроходная поза: joints[7] + TCP + направление пальца + T06.
+     * Один проход по 6 DH-матрицам вместо 2–3 отдельных вызовов
+     * (getAllJointPositions + getEndEffector + getFingerDirection считали
+     * цепочку 3 раза: 21 + 12 + 6 трансформов вместо 6).
+     * Математика та же, поведение то же — только меньше работы.
+     * @param q         — углы конфигурации (градусы).
+     * @param joints    — выходной массив из 7 Vec3 (joints[0] = база).
+     * @param tcp       — позиция кончика пальца (базовая СК).
+     * @param fingerDir — ось Z 6-го звена в базовой СК (единичная).
+     * @param T06       — полная матрица T01·...·T56.
+     */
+    void getPose(const float q[6], Vec3 joints[7], Vec3 &tcp, Vec3 &fingerDir, Mat4 &T06);
+
+    /**
+     * То же, но углы qrad уже в радианах (путь численного IK: refineSolutionM
+     * держит q в радианах; круговой перевод рад→град→рад убран).
+     * Математика та же, что getPose.
+     */
+    void getPoseRad(const float qrad[6], Vec3 joints[7], Vec3 &tcp, Vec3 &fingerDir, Mat4 &T06);
+
+    /**
      * Получение позиции конечного эффектора (TCP — Tool Center Point).
      * TCP вычисляется как позиция запястья (сустав 6) + длина пальца
      * вдоль направления выдвижения пальца (ось Z 6-го звена).
@@ -152,25 +173,24 @@ private:
     int   linkLen[6];  // Длины звеньев в мм (не используются в FK напрямую)
     float fingerLength;// Длина пальца захвата в мм (добавляется к позиции запястья)
 
+    // Кэш тригонометрии DH (alpha/off константны между setDHParams):
+    // offRad — theta_offset в радианах, calpha/salpha — cos/sin(alpha).
+    // Убирает 12 триг + 12 умножений с каждого прохода цепочки.
+    float offRad[6];
+    float calpha[6];
+    float salpha[6];
+    void refreshTrigCache();
+
+    /** DH-матрица из готовых ca/sa (без cos/sin(alpha) внутри). */
+    Mat4 dhFast(float a, int i, float d, float theta);
+
     /**
-     * Построение матрицы DH-преобразования 4×4 для одного звена.
-     *
-     * Формула стандартной DH-матрицы:
-     *   T(a, α, d, θ) =
-     *     | cos(θ)  -sin(θ)·cos(α)   sin(θ)·sin(α)   a·cos(θ) |
-     *     | sin(θ)   cos(θ)·cos(α)  -cos(θ)·sin(α)   a·sin(θ) |
-     *     |   0         sin(α)           cos(α)            d     |
-     *     |   0           0                 0               1     |
-     *
-     * Параметры:
-     *   a     — длина звена (расстояние вдоль оси X) [мм]
-     *   α     — угол закручивания (вокруг оси X) [радианы]
-     *   d     — смещение вдоль оси Z [мм]
-     *   θ     — угол поворота вокруг оси Z [радианы] (= q[i] + theta_offset)
-     *
-     * @return Матрица 4×4 перехода от (i-1)-й СК к i-й СК.
+     * Однопроходная цепочка: joints[7] + накопленная T06 за 6 DH-матриц.
+     * Внутренний мотор getPose и всех одиночных геттеров.
      */
-    Mat4 dhTransform(float a, float alpha, float d, float theta);
+    void computeChain(const float q[6], Vec3 joints[7], Mat4 &T06);
+    /** То же, но входные углы уже в радианах (численный IK). */
+    void computeChainRad(const float qrad[6], Vec3 joints[7], Mat4 &T06);
 
     /**
      * Вычисление прямой кинематики — произведение DH-матриц от базы
@@ -179,8 +199,8 @@ private:
      * Алгоритм:
      *   T = E (единичная матрица 4×4)
      *   для i = 0 .. upToJoint:
-     *     θ = q[i] (градусы) + theta_offset (градусы) → радианы
-     *     Ti = dhTransform(a_i, α_i, d_i, θ_i)
+     *     θ = q[i] (градусы) + theta_offset (кэш offRad)
+     *     Ti = dhFast(a_i, i, d_i, θ_i)   (cos/sin(alpha) из кэша)
      *     T = T × Ti   (накопление преобразований)
      *
      * Результат T = T0,upToJoint — матрица перехода от базы до сустава upToJoint.
