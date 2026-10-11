@@ -583,13 +583,13 @@ static const float CHAIN_RAMP_FRAC = 0.15f;
  * на easeInOut (стоп как раньше).
  */
 static float chainEase(float t, float rIn, float rOut, float V) {
-    const float PI = 3.14159265f;
+    const float CHAIN_PI = 3.14159265f;
     if (rIn > 0.0f && t < rIn) {
-        return V * (t - (rIn / PI) * sinf(PI * t / rIn)) * 0.5f;
+        return V * (t - (rIn / CHAIN_PI) * sinf(CHAIN_PI * t / rIn)) * 0.5f;
     }
     if (rOut > 0.0f && t > 1.0f - rOut) {
         float u = 1.0f - t;
-        return 1.0f - V * (u - (rOut / PI) * sinf(PI * u / rOut)) * 0.5f;
+        return 1.0f - V * (u - (rOut / CHAIN_PI) * sinf(CHAIN_PI * u / rOut)) * 0.5f;
     }
     return V * rIn * 0.5f + V * (t - rIn);
 }
