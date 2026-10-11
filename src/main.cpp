@@ -1895,6 +1895,21 @@ void setup() {
         cmd28.feedrate = 15.0f;  // тихо: 15% скорости
         handleG28(cmd28);
     }
+    // Принудительный refresh home-PWM на ВСЕ 7 каналов: интерполятор мог
+    // пропустить нулевые дельты (sequential делает continue), а обратной
+    // связи у серв нет — запястье/гриппер могли стоять где угодно и так
+    // бы там и остались. Прямая запись home без условий движения.
+    // Гейт тот же, что у G28 выше: цель обязана быть safe.
+    {
+        bool homeSafe = !safety.isEnabled() || safety.checkAllLinks(homeAngles.angles);
+        if (homeSafe) {
+            servoCtrl.setAngles(homeAngles);
+            Serial.println("OK: Home PWM refreshed on all 7 servos");
+        } else {
+            Serial.print("ERROR: Home unsafe, PWM refresh skipped: ");
+            Serial.println(safety.getLastError());
+        }
+    }
     // Калибровка нуля гиро — только если IMU есть. Для bias нужна лишь
     // неподвижность (рука уже стоит в home), а не сама поза.
     // Рука должна стоять смирно!
