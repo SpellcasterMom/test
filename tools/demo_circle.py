@@ -21,10 +21,17 @@ Circle demo: TCP рисует круг в наклонной плоскости.
           No accurate safe IK на дуге (позиция везде <=1мм, падает только
           ориентация) — демо честных ворот 10мм/15°.
 
-Каждый шаг: G1 -> M115 целиком в лог-файл + dPos/dOri в консоль.
+Каждый шаг: G1 (+ M115 целиком в лог-файл и dPos/dOri в консоль —
+только в режиме log).
+
+Цепочка блендинга (прошивка feat-blend-g1): все точки кроме последней
+шлются с Q1 — стыки без останова. В режиме log Q1 не ставится
+(M115 нужна устоявшаяся поза).
 
 Использование:
-    python demo_circle.py [/dev/ttyUSB0] [tilt|plusx]
+    python demo_circle.py [/dev/ttyUSB0] [tilt|plusx] [log]
+    без log — только движения (G90, G28 H1, круг), без файла и M115;
+    с log — плюс лог-файл и диагностика M115 после каждого шага.
 Требования: pip install pyserial
 """
 
@@ -96,9 +103,13 @@ PRESETS = {
 
 PORT = None
 PRESET = "tilt"
+LOG = False
 for arg in sys.argv[1:]:
-    if arg.lower() in PRESETS:
-        PRESET = arg.lower()
+    low = arg.lower()
+    if low in PRESETS:
+        PRESET = low
+    elif low == "log":
+        LOG = True
     else:
         PORT = arg  # иначе считаем портом
 if PORT is None:
@@ -173,28 +184,68 @@ def main():
     sys.stdout.reconfigure(line_buffering=True)
     port = PORT or find_port()
     steps = build_steps(PRESETS[PRESET])
-    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "circle_" + time.strftime("%Y%m%d_%H%M%S") + ".log")
-    log = open(log_path, "w", encoding="utf-8")
+    log = None
+    log_path = None
+    if LOG:
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "circle_" + time.strftime("%Y%m%d_%H%M%S") + ".log")
+        log = open(log_path, "w", encoding="utf-8")
     print(f"Порт: {port}")
     print(f"Круг r={R:.0f} в наклонной плоскости, центр=({CX:.0f},{CY:.0f},{CZ:.0f}),")
-    print(f"  нормаль={tuple(round(c, 2) for c in _NN)}, пресет={PRESET}")
-    print(f"  лог M115: {log_path}")
-    log.write(f"# preset={PRESET} r={R} center=({CX},{CY},{CZ})\n")
+    print(f"  нормаль={tuple(round(c, 2) for c in _NN)}, пресет={PRESET}, лог={'вкл' if LOG else 'выкл'}")
+    if LOG:
+        print(f"  лог M115: {log_path}")
+        log.write(f"# preset={PRESET} r={R} center=({CX},{CY},{CZ})\n")
     ser = open_serial(port)
     ser.read_all()
     ok, err = send(ser, "G90")
     print("G90:", "OK" if ok else err)
-    log.write(f">> G90\n<< {'OK' if ok else err}\n")
-    print(f"{'т.':>4} {'dPos':>6} {'dOri':>6}  {'время':>14}  итог")
+    if LOG:
+        log.write(f">> G90\n<< {'OK' if ok else err}\n")
+    # Старт всегда из парка: первая точка круга может быть где угодно
+    # (в т.ч. внизу) — без G28 H1 рука сразу ныряет туда из текущей позы.
+    ok, err = send(ser, "G28 H1", timeout=120.0)
+    print("G28 H1:", "OK" if ok else err)
+    if LOG:
+        log.write(f">> G28 H1\n<< {'OK' if ok else err}\n")
+    if not ok:
+        print("Парковка не удалась — круг не запускаю.")
+        if log:
+            log.close()
+        ser.close()
+        sys.exit(1)
+    # ...и сразу раскладываемся в home: декартов трекинг не умеет
+    # стартовать из сложенной позы (конфигурации в 70-200° друг от друга,
+    # гейт 45°/шаг), а парк→home — штатный joint-путь каждого boot (setup).
+    ok, err = send(ser, "G28", timeout=120.0)
+    print("G28:", "OK" if ok else err)
+    if LOG:
+        log.write(f">> G28\n<< {'OK' if ok else err}\n")
+    if not ok:
+        print("Раскладка в home не удалась — круг не запускаю.")
+        if log:
+            log.close()
+        ser.close()
+        sys.exit(1)
+    if LOG:
+        print(f"{'т.':>4} {'dPos':>6} {'dOri':>6}  {'время':>14}  итог")
     t_start = time.time()
+    n = len(steps)
     for k, cmd in enumerate(steps):
-        ok, err = send(ser, cmd, timeout=60.0)
+        # Блендинг: все точки кроме последней — с Q1 (стыки без останова).
+        # В log-режиме Q1 не ставим: M115 нужна устоявшаяся поза.
+        send_cmd = cmd if LOG or k >= n - 1 else cmd + " Q1"
+        ok, err = send(ser, send_cmd, timeout=60.0)
         stamp = time.strftime("%H:%M:%S") + f" (+{time.time()-t_start:6.1f}c)"
-        log.write(f">> {cmd}\n")
+        if LOG:
+            log.write(f">> {send_cmd}\n")
         if not ok:
             print(f"{k:>4} {'-':>6} {'-':>6}  {stamp}  {err}")
-            log.write(f"<< {err}\n")
+            if LOG:
+                log.write(f"<< {err}\n")
+            continue
+        if not LOG:
+            print(f"{k:>4}  OK  {stamp}  {send_cmd}")
             continue
         ser.read_all()
         ser.write(b"M115\n")   # M115 не шлёт OK — читаем сырьём
@@ -206,8 +257,9 @@ def main():
             print(f"{k:>4} {float(m.group(1)):>6.1f} {float(m.group(2)):>6.1f}  {stamp}  OK")
         else:
             print(f"{k:>4} {'?':>6} {'?':>6}  {stamp}  moved, no RESIDUAL parsed")
-    log.close()
-    print(f"Лог записан: {log_path}")
+    if log:
+        log.close()
+        print(f"Лог записан: {log_path}")
     ser.close()
 
 

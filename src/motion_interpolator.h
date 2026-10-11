@@ -124,9 +124,22 @@ public:
      * При срыве трекинга/safety — остановка на последнем хорошем шаге, false.
      * @param targetPose Целевая поза TCP (позиция + эйлеры ZYX + захват)
      * @param feedrate Процент от предельной скорости (0-100, >100 = 100%).
+     * @param blendOut true (G1 ... Q1): в конце НЕ тормозить — следующий G1
+     *        продолжит цепочку. Скорость на стыке не рвётся в 0 (трапеция,
+     *        см. chainEase), стартовый solveAll следующего отрезка пропускается
+     *        (трекинг непрерывен). Без Q — стоп в конце как раньше.
      * @return true если движение завершено успешно
      */
-    bool moveToPose(const Pose &targetPose, float feedrate);
+    bool moveToPose(const Pose &targetPose, float feedrate, bool blendOut = false);
+
+    /**
+     * @brief Внутри ли цепочки блендинга (предыдущий G1 был с Q1 и доехал).
+     * handleG1 по нему пропускает стартовый solveAll/диагностику сидов.
+     */
+    bool chainActive() const { return chainActive_; }
+
+    /** Разорвать цепочку (M112/отказ/смена режима делают это сами). */
+    void clearChain() { chainActive_ = false; }
 
     /**
      * @brief Проверка, выполняется ли движение в данный момент.
@@ -167,6 +180,8 @@ private:
 
     JointAngles currentAngles; // Текущие углы сочленений
     bool        moving;        // Флаг выполняющегося движения
+    bool        chainActive_;  // Предыдущий G1(Q1) доехал: следующий продолжает без останова.
+                               // Сбрасывают: moveTo(), M112/любой отказ, clearChain(), старт.
     char        lastMode[8];   // LIN / SEQ / CART / NONE — кто ехал последним
     char        lastNote[96];  // шаги/время/причина отказа (для M115)
 

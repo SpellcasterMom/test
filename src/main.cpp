@@ -735,10 +735,19 @@ void handleG1(GCodeCommand &cmd) {
 
     // Валидация конца пути (те же ворота, что G0): solveAll + min-residual
     // + порог 10мм/15°. Сам путь считает moveToPose.
+    // В цепочке блендинга (прошлый G1 был с Q1 и доехал) стартовый рестарт
+    // пропускаем: трекинг от qPrev непрерывен, ворота проверяются ПОСЛЕ
+    // движения пост-гейтом ниже. Диагностика сидов в цепочке не пишется
+    // (останова нет — мерить нечего).
+    const float IK_POS_TOL = 10.0f;
+    const float IK_ORI_TOL = 15.0f;
+    bool chainIn = interpolator.chainActive();
+    bool blendOut = cmd.hasParam['Q' - 'A'] && cmd.params['Q' - 'A'] != 0.0f;
     diagBegin("IK-CART", cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE);
     diagLast.target = effPose;
     diagLast.hasPos = cmd.hasPosition;
     diagLast.hasOri = cmd.hasOrientation;
+    if (!chainIn) {
     JointAngles solutions[4];
     IKSolutionMeta metas[4];
     int solCount = ikSolver.solveAll(effPose, solutions, metas);
@@ -793,8 +802,6 @@ void handleG1(GCodeCommand &cmd) {
         }
     }
     bool foundSafe = (best >= 0);
-    const float IK_POS_TOL = 10.0f;
-    const float IK_ORI_TOL = 15.0f;
     if (foundSafe &&
         (diagLast.sols[best].dPos > IK_POS_TOL ||
          diagLast.sols[best].dOri > IK_ORI_TOL)) {
@@ -819,11 +826,12 @@ void handleG1(GCodeCommand &cmd) {
         return;
     }
     diagLast.chosen = best;
+    }  // if (!chainIn): в цепочке стартовый solveAll/диагностика пропущены
 
     // Декартово исполнение: TCP по прямой, IK на каждом шаге.
     float feedrate = cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE;
     interpolator.setCurrentAngles(currentAngles);
-    if (interpolator.moveToPose(effPose, feedrate)) {
+    if (interpolator.moveToPose(effPose, feedrate, blendOut)) {
         xSemaphoreTake(angleMutex, portMAX_DELAY);
         // currentAngles уже обновлены внутри moveToPose; забираем итог.
         JointAngles done = interpolator.getCurrentAngles();
@@ -859,6 +867,27 @@ void handleG1(GCodeCommand &cmd) {
         sharedState.hasError = false;
         sharedState.commandCount++;
         xSemaphoreGive(displayMutex);
+
+        // Пост-гейт цепочки: пред-валидации не было — проверяем факт.
+        // currentAngles уже = done (честная позиция), цепочку рвём.
+        if (chainIn) {
+            DiagSol gate;
+            diagEvalSol(gate, done, effPose);
+            if (gate.dPos > IK_POS_TOL || gate.dOri > IK_ORI_TOL) {
+                interpolator.clearChain();
+                char tmp[96];
+                snprintf(tmp, sizeof(tmp),
+                         "chain residual too big (dPos=%.1f dOri=%.1f)",
+                         gate.dPos, gate.dOri);
+                xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
+                sharedState.hasError = true;
+                snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Chain residual");
+                xSemaphoreGive(displayMutex);
+                Serial.print("ERROR: ");
+                Serial.println(tmp);
+                return;
+            }
+        }
 
         Serial.println("OK");
     } else {
