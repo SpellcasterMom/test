@@ -681,6 +681,10 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate, bool
     // Берём ближайшую к текущей из {трекинг, геометрия}: чистый refine
     // иногда уходит в дальнюю ветвь и раздувает timeMs в разы (рука потом
     // ползёт еле-еле по ease-in-out, хотя путь рядом).
+    // В цепочке оценка нужна только для темпа (не для точности) — бюджет
+    // 5 итераций вместо 25: иначе каждый стык стоит ~0.2с счёта с удержанной
+    // позой, и блендинг не блендит. На точность не влияет: движет трекинг.
+    if (chainIn) ikSolver->setNumericParams(5, 1.0f, 1.0f);
     JointAngles qEnd = currentAngles;
     ikSolver->refineSolution(targetPose, qEnd, nullptr);
     {
@@ -698,6 +702,7 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate, bool
             qEnd = sols[bi];
         }
     }
+    if (chainIn) ikSolver->setNumericParams(25, 1.0f, 1.0f);  // назад к бюджету трекинга
     float maxDelta = 0;
     for (int i = 0; i < 7; i++) {
         float dd = (i < 6) ? fabs(qEnd.angles[i] - currentAngles.angles[i])

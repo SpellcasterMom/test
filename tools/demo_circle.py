@@ -214,6 +214,19 @@ def main():
             log.close()
         ser.close()
         sys.exit(1)
+    # ...и сразу раскладываемся в home: декартов трекинг не умеет
+    # стартовать из сложенной позы (конфигурации в 70-200° друг от друга,
+    # гейт 45°/шаг), а парк→home — штатный joint-путь каждого boot (setup).
+    ok, err = send(ser, "G28", timeout=120.0)
+    print("G28:", "OK" if ok else err)
+    if LOG:
+        log.write(f">> G28\n<< {'OK' if ok else err}\n")
+    if not ok:
+        print("Раскладка в home не удалась — круг не запускаю.")
+        if log:
+            log.close()
+        ser.close()
+        sys.exit(1)
     if LOG:
         print(f"{'т.':>4} {'dPos':>6} {'dOri':>6}  {'время':>14}  итог")
     t_start = time.time()
