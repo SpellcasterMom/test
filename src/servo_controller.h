@@ -40,7 +40,7 @@
  *
  * minAngle/maxAngle в config.h остаются в МАТЕМАТИЧЕСКОМ диапазоне
  * (-135..+135, -90..+90, 0..100). homeOffset прибавляется ВНУТРИ
- * setAngle() и angleToMicroseconds() перед конвертацией в PWM.
+ * setAngle() и computePulseUs() перед конвертацией в PWM.
  */
 class ServoController {
 public:
@@ -76,8 +76,8 @@ public:
     void setAngle(int servoId, float angle);
 
     /**
-     * Последовательная установка углов для всех 7 сервоприводов.
-     * Вызывает setAngle() для каждого индекса 0–6.
+     * Пакетная установка углов для всех 7 сервоприводов.
+     * Математика — через computePulseUs(), I2C — под одним take мьютекса.
      *
      * @param angles  структура с массивом МАТЕМАТИЧЕСКИХ углов для всех серво
      */
@@ -152,26 +152,19 @@ private:
     /** Флаг включения: true — серво управляются, false — игнорируются */
     bool enabled = true;
 
+    // Кэш линейной цепочки q_math → PWM (конфиг меняется только в
+    // init()/setConfig(), поэтому делить на каждой записи незачем):
+    //   corrK[i]    = correctionFactor/100 (точно как в setAngle)
+    //   servoMinA[i]/servoMaxA[i] = min/maxAngle + homeOffset (серво-диапазон)
+    float corrK[7];
+    float servoMinA[7];
+    float servoMaxA[7];
+    void refreshPwmCache();
+
     /**
-     * Внутренний метод: конвертация угла в ширину импульса (микросекунды).
-     *
-     * ВАЖНО: angle приходит как СЕРВО-угол (уже после homeOffset).
-     * Границы minAngle/maxAngle в конфиге — математические, поэтому внутри
-     * функции они смещаются на homeOffset:
-     *
-     *   servoMin = minAngle + homeOffset
-     *   servoMax = maxAngle + homeOffset
-     *
-     * Формула линейной интерполяции:
-     *   pulse_us = minPWM + (angle − servoMin) * (maxPWM − minPWM) / (servoMax − servoMin)
-     *
-     * где minPWM/maxPWM — ширина импульса в микросекундах для предельных углов.
-     * Результат ограничивается диапазоном [minPWM, maxPWM] и пишется
-     * в драйвер напрямую (janelia принимает микросекунды, тики не нужны).
-     *
-     * @param servoId  индекс сервопривода
-     * @param angle    СЕРВО-угол в градусах (уже с homeOffset)
-     * @return         ширина импульса в микросекундах
+     * Чистая математика q_math → мкс ( offset → коррекция → инверсия →
+     * clamp → линейная интерполяция). Без I2C и currentAngles —
+     * общий мотор setAngle()/setAngles(). Бит-в-бит как раньше.
      */
-    uint16_t angleToMicroseconds(int servoId, float angle);
+    uint16_t computePulseUs(int servoId, float qmath);
 };
