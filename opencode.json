@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "opencode-morph-fast-apply",
+    "opencode-shell-strategy",
+    "opencode-worktree",
+    "opencode-supermemory",
+    "opencode-conductor"
+  ],
+  "mcp": {
+    "claw": {
+      "type": "local",
+      "command": ["python3", "mcp/server.py"],
+      "environment": {
+        "ROBOT_TRANSPORT": "serial"
+      }
+    }
+  }
+}
