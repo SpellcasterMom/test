@@ -106,8 +106,8 @@ def main():
     print(f"Порт: {port}")
     ser = open_serial(port)
     ser.read_all()
-    ok, err = send(ser, "G90")
-    print("G90:", "OK" if ok else err)
+#    ok, err = send(ser, "G90")
+#    print("G90:", "OK" if ok else err)
     print(f"{'шаг':>4} {'dPos':>6} {'dOri':>6}  {'время':>14}  итог")
     t_start = time.time()
     for k, cmd in enumerate(STEPS):
