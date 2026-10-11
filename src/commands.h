@@ -119,6 +119,8 @@ const CommandDef COMMANDS[] = {
         //   J       — номер промежуточной точки
         //   F       — скорость подачи (мм/мин), по умолчанию 500.0
         //   P       — номер промежуточной точки (обязательный для смешанного режима)
+        //   Q       — блендинг цепочки: Q1 = в конце НЕ тормозить (следующий G1
+        //             продолжит движение; см. FLOW.md). Без Q — стоп как раньше.
         .params = {
             {'X', PARAM_FLOAT, 0, 0.0},
             {'Y', PARAM_FLOAT, 0, 0.0},
@@ -129,8 +131,9 @@ const CommandDef COMMANDS[] = {
             {'J', PARAM_FLOAT, 0, 0.0},
             {'F', PARAM_FLOAT, 0, 500.0},
             {'P', PARAM_FLOAT, -1, 0.0},
+            {'Q', PARAM_FLOAT, 0, 0.0},
         },
-        .paramCount = 9,
+        .paramCount = 10,
         .handler = handleG1,
     },
     {

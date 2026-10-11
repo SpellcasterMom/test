@@ -20,7 +20,8 @@
 MotionInterpolator::MotionInterpolator()
     : servoCtrl(nullptr), backlash(nullptr), safety(nullptr),
       ikSolver(nullptr), fkSolver(nullptr),
-      strategy(INTERP_AUTO), stepCallback(nullptr), moving(false) {
+      strategy(INTERP_AUTO), stepCallback(nullptr), moving(false),
+      chainActive_(false) {
     memset(&currentAngles, 0, sizeof(currentAngles));
     setMark("NONE", "-");
 }
@@ -71,9 +72,11 @@ bool MotionInterpolator::isMoving() const {
  * @brief Немедленная остановка движения.
  * Устанавливает флаг moving=false. Цикл интерполяции проверяет этот флаг
  * на каждой итерации и прерывается при его сбросе.
+ * Рвёт и цепочку блендинга (M112/E-STOP — следующий G1 только с останова).
  */
 void MotionInterpolator::stop() {
     moving = false;
+    chainActive_ = false;
 }
 
 /**
@@ -89,6 +92,9 @@ void MotionInterpolator::stop() {
  */
 bool MotionInterpolator::moveTo(const JointAngles &target, float feedrate) {
     if (!servoCtrl) return false;
+
+    // Смена режима (joint) рвёт декартову цепочку: следующий G1 начнёт с останова.
+    chainActive_ = false;
 
     // Зажим цели в лимиты серв (математический диапазон): команда вроде
     // M104 P2=200 больше не уведёт currentAngles в ложь (серво всё равно
@@ -564,6 +570,30 @@ void MotionInterpolator::outputStep(const JointAngles &q) {
     }
 }
 
+// Доля шагов на разгон/торможение в цепочке блендинга.
+static const float CHAIN_RAMP_FRAC = 0.15f;
+
+/**
+ * Профиль e(t) для блендинга: трапеция с косинусными рампами.
+ * rIn/rOut — доли отрезка на разгон/торможение (0 = сторона в цепочке,
+ * без останова). Скорость C1-непрерывна на стыках: рампа 0→V косинусом,
+ * круиз V=1/(1-rIn/2-rOut/2) (~1.08 при рампах 15% — единицы процентов
+ * сверх мягкого потолка скорости; жёсткие safety-лимиты не трогаем).
+ * Вырожденный случай (рампы накрывают весь отрезок) —caller откатывается
+ * на easeInOut (стоп как раньше).
+ */
+static float chainEase(float t, float rIn, float rOut, float V) {
+    const float PI = 3.14159265f;
+    if (rIn > 0.0f && t < rIn) {
+        return V * (t - (rIn / PI) * sinf(PI * t / rIn)) * 0.5f;
+    }
+    if (rOut > 0.0f && t > 1.0f - rOut) {
+        float u = 1.0f - t;
+        return 1.0f - V * (u - (rOut / PI) * sinf(PI * u / rOut)) * 0.5f;
+    }
+    return V * rIn * 0.5f + V * (t - rIn);
+}
+
 /**
  * @brief Декартово движение к целевой позе TCP.
  *
@@ -574,9 +604,14 @@ void MotionInterpolator::outputStep(const JointAngles &q) {
  * (solveAll, ближайший к предыдущему); не вышло — стоп на последнем
  * хорошем шаге, false. Кончик стоит на прямой с точностью IK.
  */
-bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
+bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate, bool blendOut) {
     if (!servoCtrl || !ikSolver || !fkSolver) return false;
     moving = true;
+
+    // Цепочка блендинга: вход — флаг от прошлого G1(Q1), выход — флаг Q1 этого.
+    // Любой отказ ниже оставляет флаг сброшенным (следующий G1 стартует с останова).
+    bool chainIn = chainActive_;
+    chainActive_ = false;
 
     // Бюджет доводки на шаг: трекинг сходится за ~3-15 итераций (двойник),
     // полный бюджет 100 на шаг давал рывки ~6 раз медленнее плана.
@@ -638,6 +673,7 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
     if (posDist < 0.5f && th < cartDeg2Rad(0.5f)) {
         moving = false;
         ikSolver->setNumericParams(100, 1.0f, 1.0f);
+        chainActive_ = blendOut;  // движения нет — цепочка течёт транзитом
         return true;
     }
 
@@ -671,6 +707,7 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
     if (maxDelta < MIN_STEP_DEG) {
         moving = false;
         ikSolver->setNumericParams(100, 1.0f, 1.0f);
+        chainActive_ = blendOut;
         return true;
     }
     float maxTime = 0;
@@ -692,9 +729,31 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
     int steps = (int)(timeMs / STEP_INTERVAL_MS);
     if (steps < 1) steps = 1;
 
+    // Профиль скорости отрезка: одиночный (без цепочки) — easeInOut
+    // бит-в-бит как раньше; в цепочке — трапеция chainEase (рампы только
+    // со свободных сторон, стыки C1-непрерывны). Крошечные отрезки
+    // (<6 шагов) всегда legacy — рампам там негде развернуться.
+    float profRIn = 0.0f, profROut = 0.0f, profV = 1.0f;
+    bool useChainProf = (chainIn || blendOut) && steps >= 6;
+    if (useChainProf) {
+        int rSteps = (int)(steps * CHAIN_RAMP_FRAC + 0.5f);
+        if (rSteps < 2) rSteps = 2;
+        if (2 * rSteps >= steps) {
+            useChainProf = false;  // вырожденный — legacy стоп-профиль
+        } else {
+            profRIn = chainIn ? 0.0f : (float)rSteps / (float)steps;
+            profROut = blendOut ? 0.0f : (float)rSteps / (float)steps;
+            profV = 1.0f / (1.0f - profRIn * 0.5f - profROut * 0.5f);
+        }
+    }
+
     float grip0 = currentAngles.angles[6];
     float grip1 = targetPose.gripper;
     JointAngles qPrev = currentAngles;
+
+    // Замер темпа счёта (B3): max/avg мс на шаг — в финальную метку.
+    uint32_t maxSpent = 0;
+    uint32_t sumSpent = 0;
 
     // --- Цикл по декартовым шагам ---
     // Ориентация идёт матрицей Rt сквозняком (slerp → refineSolutionM):
@@ -721,7 +780,8 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
         }
 
         float t = (float)step / steps;
-        float e = easeInOut(t);
+        float e = useChainProf ? chainEase(t, profRIn, profROut, profV)
+                               : easeInOut(t);
         Vec3 pp = {p0.x + dx * e, p0.y + dy * e, p0.z + dz * e};
 
         // Rodrigues: R = R0 · Rot(ax, th·e)
@@ -796,6 +856,8 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
         // идёт рывками медленнее плана (счёт ~100мс + фикс 20мс).
         {
             uint32_t spent = millis() - stepT0;
+            if (spent > maxSpent) maxSpent = spent;
+            sumSpent += spent;
             if (spent < (uint32_t)STEP_INTERVAL_MS) {
                 delay((unsigned long)(STEP_INTERVAL_MS - spent));
             }
@@ -806,9 +868,13 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate) {
     if (moving) {
         currentAngles = qPrev;
         char note[64];
-        snprintf(note, sizeof(note), "steps=%d timeMs=%.0f", steps, timeMs);
+        uint32_t avgSpent = (steps > 0) ? sumSpent / (uint32_t)(steps + 1) : 0;
+        snprintf(note, sizeof(note), "steps=%d tMs=%.0f maxStep=%lu avgStep=%lu%s",
+                 steps, timeMs, (unsigned long)maxSpent, (unsigned long)avgSpent,
+                 (chainIn || blendOut) ? " chain" : "");
         setMark("CART", note);
         moving = false;
+        chainActive_ = blendOut;  // цепочка живёт только при успехе и Q1
         return true;
     }
     setMark("CART", "stopped");
