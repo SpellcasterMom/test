@@ -867,7 +867,7 @@ void handleG1(GCodeCommand &cmd) {
             sharedState.hasError = true;
             snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Batch full");
             xSemaphoreGive(displayMutex);
-            Serial.println("ERROR: batch full (32 max), flushed - close and reopen");
+            Serial.println("ERROR: batch full (64 max), flushed - send in chunks");
             return;
         }
         Serial.printf("OK: buffered %d/%d\n",
@@ -1557,7 +1557,7 @@ void handleM450(GCodeCommand &cmd) {
             return;
         }
         interpolator.batchBegin();
-        Serial.println("OK: batch open (32 max)");
+        Serial.println("OK: batch open (64 max)");
     } else if (s == 0) {
         if (!interpolator.batchOpen()) {
             Serial.println("ERROR: no open batch (M450 S1 first)");

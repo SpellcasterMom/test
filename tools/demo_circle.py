@@ -22,8 +22,9 @@ Circle demo: TCP рисует круг в наклонной плоскости.
           ориентация) — демо честных ворот 10мм/15°.
 
 Режим исполнения — пакет M450 (прошивка умеет батч):
-  M450 S1 → 24× G1 (копятся: OK = принято+провалидировано) →
-  M450 S0 (исполнить всё одной траекторией без остановок).
+  M450 S1 → точки чанками по 60 (OK = принято+провалидировано) →
+  M450 S0 на чанк (исполнить одной траекторией без остановок).
+Буфер прошивки — 64 точки (круг 24 влезает целиком, чанкинг на будущее).
 В конце — батч-отчёт M115 (плановые dPos/dOri по точкам).
 
 Использование:
@@ -280,39 +281,50 @@ def main():
             print("Раскладка в home не удалась — круг не запускаю.")
             sys.exit(1)
 
-        # Пакет: копим все 24 точки (OK = принято+провалидировано)...
-        ok, err = send(ser, "M450 S1", timeout=30.0)
-        print("M450 S1:", "OK" if ok else err)
-        if LOG:
-            log.write(f">> M450 S1\n<< {'OK' if ok else err}\n")
-        if not ok:
-            print("Пакет не открылся (нужна прошивка с M450) — выхожу.")
-            sys.exit(1)
+        # Пакет: копим точки чанками по 60 (буфер прошивки — 64).
+        # На стыке чанков — мягкая перекладка через рампы (не стоп в ноль,
+        # но и не бесшовно как внутри). Круг 24 влезает в один чанк.
+        CHUNK = 60
         t_start = time.time()
-        for k, cmd in enumerate(steps):
-            ok, err = send(ser, cmd, timeout=60.0)
-            stamp = time.strftime("%H:%M:%S") + f" (+{time.time()-t_start:6.1f}c)"
+        nok = True
+        for base in range(0, len(steps), CHUNK):
+            part = steps[base:base + CHUNK]
+            ok, err = send(ser, "M450 S1", timeout=30.0)
+            print(f"M450 S1 (чанк {base // CHUNK + 1}):", "OK" if ok else err)
             if LOG:
-                log.write(f">> {cmd}\n<< {'OK' if ok else err}\n")
+                log.write(f">> M450 S1\n<< {'OK' if ok else err}\n")
             if not ok:
-                print(f"{k:>4}  ERROR {stamp}  {err} — пакет сброшен, выхожу.")
+                print("Пакет не открылся (нужна прошивка с M450) — выхожу.")
                 sys.exit(1)
-            print(f"{k:>4}  buffered  {stamp}")
-        # ...и исполняем всё одной траекторией без остановок.
-        print("Исполняю пакет...")
-        ok, err = send(ser, "M450 S0", timeout=300.0)
-        print("M450 S0:", "OK" if ok else err)
-        if LOG:
-            log.write(f">> M450 S0\n<< {'OK' if ok else err}\n")
-        if not ok:
-            print("Пакет не доехал — смотрю M115.")
-        out = m115_raw(ser)
-        if LOG:
-            log.write(out + ("\n" if not out.endswith("\n") else ""))
-        m = re.search(r"dist=([\d.]+)mm dOri=([\d.]+)deg", out)
-        b = re.search(r"BATCH:\s*(\d+)", out)
-        print("M115:", (f"batch {b.group(1)} pts, " if b else "") +
-              (f"dist={m.group(1)}mm dOri={m.group(2)}deg" if m else "без RESIDUAL"))
+            for k, cmd in enumerate(part, start=base):
+                ok, err = send(ser, cmd, timeout=60.0)
+                stamp = time.strftime("%H:%M:%S") + f" (+{time.time()-t_start:6.1f}c)"
+                if LOG:
+                    log.write(f">> {cmd}\n<< {'OK' if ok else err}\n")
+                if not ok:
+                    print(f"{k:>4}  ERROR {stamp}  {err} — пакет сброшен, выхожу.")
+                    sys.exit(1)
+                print(f"{k:>4}  buffered  {stamp}")
+            # ...и исполняем чанк одной траекторией без остановок.
+            print(f"Исполняю чанк ({len(part)} т.)...")
+            ok, err = send(ser, "M450 S0", timeout=300.0)
+            print("M450 S0:", "OK" if ok else err)
+            if LOG:
+                log.write(f">> M450 S0\n<< {'OK' if ok else err}\n")
+            if not ok:
+                print("Чанк не доехал — смотрю M115.")
+                nok = False
+                break
+            out = m115_raw(ser)
+            if LOG:
+                log.write(out + ("\n" if not out.endswith("\n") else ""))
+            m = re.search(r"dist=([\d.]+)mm dOri=([\d.]+)deg", out)
+            b = re.search(r"BATCH:\s*(\d+)", out)
+            print("M115:", (f"batch {b.group(1)} pts, " if b else "") +
+                  (f"dist={m.group(1)}mm dOri={m.group(2)}deg" if m else "без RESIDUAL"))
+        if not nok:
+            print("Круг не докатан — дальше вслепую не едем.")
+            sys.exit(1)
     finally:
         # Ночуем в парке: следующий boot считает руку в G28 H1.
         # Работает и при обрыве: лишний G28 H1 из парка — no-op.

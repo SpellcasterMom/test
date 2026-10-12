@@ -142,7 +142,10 @@ public:
     void clearChain() { chainActive_ = false; }
 
     // --- Пакет точек (M450/G5-стриминг) ---
-    static constexpr int BATCH_MAX = 32;  // точек в пакете (круг 24 влезает)
+    // 64 точки (~2.3 КБ статики): круг 24 влезает с запасом, чанки демо
+    // режутся по 60. Больше — хост шлёт несколькими пакетами (fail-fast
+    // ниже не даёт молча потерять точки).
+    static constexpr int BATCH_MAX = 64;
 
     /** Открыт ли пакет (между M450 S1 и S0). */
     bool batchOpen() const { return batchOpen_; }
