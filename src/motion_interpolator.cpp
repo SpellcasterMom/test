@@ -21,7 +21,7 @@ MotionInterpolator::MotionInterpolator()
     : servoCtrl(nullptr), backlash(nullptr), safety(nullptr),
       ikSolver(nullptr), fkSolver(nullptr),
       strategy(INTERP_AUTO), stepCallback(nullptr), moving(false),
-      chainActive_(false) {
+      chainActive_(false), batchOpen_(false), batchN_(0) {
     memset(&currentAngles, 0, sizeof(currentAngles));
     setMark("NONE", "-");
 }
@@ -72,11 +72,170 @@ bool MotionInterpolator::isMoving() const {
  * @brief Немедленная остановка движения.
  * Устанавливает флаг moving=false. Цикл интерполяции проверяет этот флаг
  * на каждой итерации и прерывается при его сбросе.
- * Рвёт и цепочку блендинга (M112/E-STOP — следующий G1 только с останова).
+ * Рвёт и цепочку блендинга (M112/E-STOP — следующий G1 только с останова),
+ * и открытый пакет M450 (накопленное сбрасывается).
  */
 void MotionInterpolator::stop() {
     moving = false;
     chainActive_ = false;
+    batchOpen_ = false;
+    batchN_ = 0;
+}
+
+// Профиль ноги пакета: те же рампы, что цепочка Q-блендинга.
+// middle-ноги (обе стороны в пакете) — чистый круиз e=t.
+struct BatchProf {
+    bool  trap;  // false = legacy easeInOut (крошечная нога)
+    float rIn, rOut, V;
+};
+
+// Определения ниже (после outputStep); здесь — только для batchExecute.
+static float chainEase(float t, float rIn, float rOut, float V);
+static BatchProf batchProfFor(bool rampIn, bool rampOut, int steps);
+
+// ============================================================================
+// Пакет точек M450: планирование отдельно, исполнение отдельно.
+// Исполнитель — детерминированный replay joint-поз (IK уже посчитан,
+// повторная доводка не нужна и вредна для каданса). Поэтому runtime-гейта
+// расхождения тут нет осознанно: при тех же q FK детерминирован, заново
+// мерить нечего; ворота 10/15 проверяются на планировании каждой точки.
+// ============================================================================
+
+bool MotionInterpolator::batchBegin() {
+    batchOpen_ = true;
+    batchN_ = 0;
+    chainActive_ = false;  // пакет и Q-цепочка — разные режимы
+    return true;
+}
+
+bool MotionInterpolator::batchAdd(const JointAngles &q, float feedrate,
+                                  float dPos, float dOri) {
+    if (!batchOpen_ || batchN_ >= BATCH_MAX) return false;
+    const JointAngles &from =
+        (batchN_ > 0) ? batchPts_[batchN_ - 1] : currentAngles;
+    batchPts_[batchN_] = q;
+    batchSegMs_[batchN_] = legMs(from, q, feedrate);
+    batchRes_[batchN_][0] = dPos;
+    batchRes_[batchN_][1] = dOri;
+    batchN_++;
+    return true;
+}
+
+void MotionInterpolator::batchAbort() {
+    batchOpen_ = false;
+    batchN_ = 0;
+}
+
+float MotionInterpolator::batchResPos(int i) const {
+    if (i < 0 || i >= batchN_) return 0.0f;
+    return batchRes_[i][0];
+}
+
+float MotionInterpolator::batchResOri(int i) const {
+    if (i < 0 || i >= batchN_) return 0.0f;
+    return batchRes_[i][1];
+}
+
+float MotionInterpolator::legMs(const JointAngles &from, const JointAngles &to,
+                                float feedrate) {
+    // Та же формула времени, что оценка в moveToPose: по joint-дельтам
+    // и потолкам maxAngularSpeed (включая гриппер, канал 6).
+    float maxTime = 0;
+    for (int i = 0; i < 7; i++) {
+        float dd = fabs(to.angles[i] - from.angles[i]);
+        if (servoCtrl && dd > 0) {
+            float maxSpeed = servoCtrl->getConfig(i).maxAngularSpeed;
+            if (maxSpeed > 0) {
+                float tm = dd / maxSpeed;
+                if (tm > maxTime) maxTime = tm;
+            }
+        }
+    }
+    float pct = 100.0f;
+    if (feedrate > 0.0f && feedrate < 100.0f) pct = feedrate;
+    if (pct != 100.0f) maxTime = maxTime * (100.0f / pct);
+    return maxTime * 1000.0f;
+}
+
+bool MotionInterpolator::batchExecute() {
+    if (!batchOpen_) return false;
+    if (!servoCtrl) {
+        batchOpen_ = false;
+        batchN_ = 0;
+        return false;
+    }
+    int n = batchN_;
+    batchOpen_ = false;  // набор потреблён; повторный S0 без S1 — ошибка
+    if (n <= 0) return false;
+    moving = true;
+    chainActive_ = false;
+
+    JointAngles qPrev = currentAngles;
+    float totalMs = 0;
+    for (int i = 0; i < n; i++) totalMs += batchSegMs_[i];
+
+    TickType_t slot = xTaskGetTickCount();  // единый каданс на весь пакет
+    for (int leg = 0; leg < n && moving; leg++) {
+        const JointAngles &to = batchPts_[leg];
+        JointAngles legFrom = qPrev;  // C0: нога стартует ровно там, где встала прошлая
+        int steps = (int)(batchSegMs_[leg] / STEP_INTERVAL_MS);
+        if (steps < 1) steps = 1;
+        BatchProf pr = batchProfFor(leg == 0, leg == n - 1, steps);
+        for (int step = 0; step <= steps; step++) {
+            if (!moving) break;
+            // M112-сниффер (тот же, что в moveToPose).
+            if (Serial.available()) {
+                String line = "";
+                while (Serial.available()) {
+                    char ch = Serial.read();
+                    if (ch == '\n' || ch == '\r') break;
+                    line += ch;
+                }
+                line.trim();
+                line.toUpperCase();
+                if (line.startsWith("M112")) {
+                    moving = false;
+                    setMark("BATCH", "stopped-M112");
+                    currentAngles = qPrev;
+                    return false;
+                }
+            }
+            float t = (float)step / steps;
+            float e = pr.trap ? chainEase(t, pr.rIn, pr.rOut, pr.V)
+                              : easeInOut(t);
+            JointAngles qq;
+            for (int k = 0; k < 7; k++) {
+                qq.angles[k] = legFrom.angles[k] +
+                    (to.angles[k] - legFrom.angles[k]) * e;
+            }
+            // Честность рантайма: safety каждой точки (дешёвый, ~1-2мс —
+            // в отличие от IK-доводки, каданс не ломает).
+            if (safety && safety->isEnabled() && !safety->checkAllLinks(qq.angles)) {
+                char note[64];
+                snprintf(note, sizeof(note), "batch leg %d: %.40s", leg,
+                         safety->getLastError().c_str());
+                setMark("BATCH", note);
+                moving = false;
+                currentAngles = qPrev;
+                return false;
+            }
+            outputStep(qq);
+            qPrev = qq;
+            vTaskDelayUntil(&slot, pdMS_TO_TICKS((uint32_t)STEP_INTERVAL_MS));
+        }
+    }
+
+    currentAngles = qPrev;
+    if (moving) {
+        char note[64];
+        snprintf(note, sizeof(note), "n=%d tMs=%.0f", n, totalMs);
+        setMark("BATCH", note);
+        moving = false;
+        return true;
+    }
+    setMark("BATCH", "stopped");
+    moving = false;
+    return false;
 }
 
 /**

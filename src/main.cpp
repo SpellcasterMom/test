@@ -391,6 +391,11 @@ static void diagPrintJoints(const Vec3 joints[7]) {
  * G0 — перемещение (быстрое).
  */
 void handleG0(GCodeCommand &cmd) {
+    // Пакет M450 копит только G1: движение тут разорвало бы траекторию.
+    if (interpolator.batchOpen()) {
+        Serial.println("ERROR: batch open - close it first (M450 S0)");
+        return;
+    }
     cmd.determineMode();
 
     // Сброс ошибки при новой команде
@@ -743,6 +748,15 @@ void handleG1(GCodeCommand &cmd) {
     const float IK_ORI_TOL = 15.0f;
     bool chainIn = interpolator.chainActive();
     bool blendOut = cmd.hasParam['Q' - 'A'] && cmd.params['Q' - 'A'] != 0.0f;
+    bool inBatch = interpolator.batchOpen();
+    // Опор непрерывности для min-residual: в пакете — последняя накопленная
+    // точка (currentAngles стоит: движения нет), иначе — текущая поза.
+    // Вне пакета копия равна currentAngles — поведение бит-в-бит как раньше.
+    JointAngles contRef = currentAngles;
+    if (inBatch) interpolator.batchPrevPt(contRef);
+    // Выборка для пакета (заполняется внутри валидации ниже).
+    JointAngles batchSel;
+    float batchRdp = 0.0f, batchRdo = 0.0f;
     diagBegin("IK-CART", cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE);
     diagLast.target = effPose;
     diagLast.hasPos = cmd.hasPosition;
@@ -789,7 +803,7 @@ void handleG1(GCodeCommand &cmd) {
         if (!diagLast.sols[i].safe) continue;
         float jd = 0;
         for (int j = 0; j < 6; j++) {
-            float d = fabs(diagLast.sols[i].q.angles[j] - currentAngles.angles[j]);
+            float d = fabs(diagLast.sols[i].q.angles[j] - contRef.angles[j]);
             if (d > jd) jd = d;
         }
         float hPen = diagLast.sols[i].minZ < HEIGHT_Z_REF
@@ -826,7 +840,40 @@ void handleG1(GCodeCommand &cmd) {
         return;
     }
     diagLast.chosen = best;
+        // Пакет: запоминаем выбранное для накопления ниже (цепочка и пакет
+        // взаимоисключают друг друга: сюда в цепочке не попадаем).
+        if (inBatch) {
+            batchSel = solutions[best];
+            batchRdp = diagLast.sols[best].dPos;
+            batchRdo = diagLast.sols[best].dOri;
+        }
     }  // if (!chainIn): в цепочке стартовый solveAll/диагностика пропущены
+
+    // Пакет M450: точка прошла те же ворота — копим вместо движения.
+    // Движения нет, поэтому OK здесь = «принято и провалидировано».
+    // chainIn здесь невозможен (цепочка и пакет взаимоисключают друг друга),
+    // но нули в буфер страшнее лишней проверки: страхуемся явно.
+    if (inBatch && chainIn) {
+        interpolator.clearChain();
+        interpolator.batchAbort();
+        Serial.println("ERROR: chain meets batch (internal), both reset");
+        return;
+    }
+    if (inBatch) {
+        float feed = cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE;
+        if (!interpolator.batchAdd(batchSel, feed, batchRdp, batchRdo)) {
+            interpolator.batchAbort();
+            xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
+            sharedState.hasError = true;
+            snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Batch full");
+            xSemaphoreGive(displayMutex);
+            Serial.println("ERROR: batch full (32 max), flushed - close and reopen");
+            return;
+        }
+        Serial.printf("OK: buffered %d/%d\n",
+                      interpolator.batchCount(), MotionInterpolator::BATCH_MAX);
+        return;
+    }
 
     // Декартово исполнение: TCP по прямой, IK на каждом шаге.
     float feedrate = cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE;
@@ -903,6 +950,10 @@ void handleG1(GCodeCommand &cmd) {
  * G28 — перемещение в домашнюю позицию (home).
  */
 void handleG28(GCodeCommand &cmd) {
+    if (interpolator.batchOpen()) {
+        Serial.println("ERROR: batch open - close it first (M450 S0)");
+        return;
+    }
     xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
     sharedState.hasError = false;
     xSemaphoreGive(displayMutex);
@@ -1000,6 +1051,10 @@ void handleG91(GCodeCommand &cmd) {
  * умолчанию DEFAULT_FEEDRATE.
  */
 void handleM104(GCodeCommand &cmd) {
+    if (interpolator.batchOpen()) {
+        Serial.println("ERROR: batch open - close it first (M450 S0)");
+        return;
+    }
     JointAngles target = currentAngles;
     for (int i = 0; i < 7; i++) {
         if (cmd.servoOverride[i]) {
@@ -1100,6 +1155,10 @@ void handleM105(GCodeCommand &cmd) {
  * Едет только сустав 6 через тот же interpolator, что M104.
  */
 void handleM108(GCodeCommand &cmd) {
+    if (interpolator.batchOpen()) {
+        Serial.println("ERROR: batch open - close it first (M450 S0)");
+        return;
+    }
     const int SI = 'S' - 'A';
     if (!cmd.hasParam[SI]) {
         strncpy(diagLast.failReason, "M108 requires S (0-100)",
@@ -1261,6 +1320,19 @@ void handleM115(GCodeCommand &cmd) {
                           diagLast.detourPts[i].x,
                           diagLast.detourPts[i].y,
                           diagLast.detourPts[i].z);
+        }
+    }
+    // Пакет M450: плановые расхождения точек (замерены при накоплении,
+    // рантайм детерминирован — перемерять нечего). Пусто = пакета не было.
+    {
+        int bn = interpolator.batchCount();
+        if (bn > 0) {
+            Serial.printf("BATCH: %d pts\n", bn);
+            for (int i = 0; i < bn; i++) {
+                Serial.printf("  [%d] dPos=%.1fmm dOri=%.1fdeg\n", i,
+                              interpolator.batchResPos(i),
+                              interpolator.batchResOri(i));
+            }
         }
     }
     // Фактическое положение
@@ -1467,6 +1539,71 @@ void handleM430(GCodeCommand &cmd) {
     interpStrategy = (InterpolationStrategy)s;
     interpolator.setStrategy(interpStrategy);
     Serial.println("OK: Strategy = " + String(s));
+}
+
+/**
+ * M450 — пакет точек: планирование отдельно, исполнение отдельно.
+ *   S=1 — открыть (следующие G1 копятся: OK = принято+провалидировано);
+ *   S=0 — закрыть и исполнить всё одной траекторией без остановок;
+ *   S=2 — сбросить без движения (идемпотентно).
+ * Ворота каждой точки — те же 10мм/15° (отказ = ERROR + сброс пакета).
+ * G0/M104/G28/M108 при открытом пакете запрещены (сначала закрой).
+ */
+void handleM450(GCodeCommand &cmd) {
+    int s = cmd.hasParam['S' - 'A'] ? (int)cmd.params['S' - 'A'] : 0;
+    if (s == 1) {
+        if (interpolator.batchOpen()) {
+            Serial.println("ERROR: batch already open (M450 S0/S2 first)");
+            return;
+        }
+        interpolator.batchBegin();
+        Serial.println("OK: batch open (32 max)");
+    } else if (s == 0) {
+        if (!interpolator.batchOpen()) {
+            Serial.println("ERROR: no open batch (M450 S1 first)");
+            return;
+        }
+        if (interpolator.batchCount() == 0) {
+            interpolator.batchAbort();
+            Serial.println("ERROR: empty batch, flushed");
+            return;
+        }
+        int n = interpolator.batchCount();
+        if (interpolator.batchExecute()) {
+            xSemaphoreTake(angleMutex, portMAX_DELAY);
+            JointAngles done = interpolator.getCurrentAngles();
+            currentAngles = done;
+            xSemaphoreGive(angleMutex);
+            xSemaphoreTake(displayMutex, portMAX_DELAY);
+            for (int i = 0; i < 7; i++) {
+                sharedState.servoAngles[i] = done.angles[i];
+            }
+            float q[6];
+            for (int i = 0; i < 6; i++) q[i] = done.angles[i];
+            sharedState.tcpPosition = fkSolver.getEndEffector(q);
+            sharedState.gripperPercent = done.angles[6] / config.servos[6].maxAngle * 100.0f;
+            sharedState.isMoving = false;
+            sharedState.hasError = false;
+            sharedState.commandCount++;
+            xSemaphoreGive(displayMutex);
+            Serial.printf("OK: batch done (%d pts)\n", n);
+        } else {
+            xSemaphoreTake(angleMutex, portMAX_DELAY);
+            JointAngles done = interpolator.getCurrentAngles();
+            currentAngles = done;
+            xSemaphoreGive(angleMutex);
+            xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
+            sharedState.hasError = true;
+            snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Batch failed");
+            xSemaphoreGive(displayMutex);
+            Serial.println("ERROR: batch failed (see M115 INTERP)");
+        }
+    } else if (s == 2) {
+        interpolator.batchAbort();
+        Serial.println("OK: batch aborted");
+    } else {
+        Serial.println("ERROR: M450 S=0/1/2");
+    }
 }
 
 /**

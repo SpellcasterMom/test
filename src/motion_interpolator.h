@@ -141,6 +141,44 @@ public:
     /** Разорвать цепочку (M112/отказ/смена режима делают это сами). */
     void clearChain() { chainActive_ = false; }
 
+    // --- Пакет точек (M450/G5-стриминг) ---
+    static constexpr int BATCH_MAX = 32;  // точек в пакете (круг 24 влезает)
+
+    /** Открыт ли пакет (между M450 S1 и S0). */
+    bool batchOpen() const { return batchOpen_; }
+
+    /** Сколько точек уже накоплено. */
+    int batchCount() const { return batchN_; }
+
+    /** Последняя накопленная точка (для continuity-выбора следующей).
+     * @return false если пакет пуст (q не тронут). */
+    bool batchPrevPt(JointAngles &q) const {
+        if (batchN_ <= 0) return false;
+        q = batchPts_[batchN_ - 1];
+        return true;
+    }
+
+    /** M450 S1: открыть пакет (сбросить накопленное). */
+    bool batchBegin();
+
+    /** Положить точку в пакет (валидация — на вызывающем, здесь только слот).
+     * @param q articular цель (7 углов), segMs длительность ноги (мс),
+     *        dPos/dOri плановые расхождения для отчёта M115.
+     * @return false если пакет переполнен (состояние не меняется). */
+    bool batchAdd(const JointAngles &q, float segMs, float dPos, float dOri);
+
+    /** M450 S0: закрыть и исполнить весь пакет как одну траекторию.
+     * Рампы только по краям (первая/последняя нога), стыки без останова.
+     * @return true если всё доехало; иначе стоп на последней хорошей точке. */
+    bool batchExecute();
+
+    /** M450 S2 / M112: сбросить пакет без движения (идемпотентно). */
+    void batchAbort();
+
+    /** Плановые расхождения точки i для отчёта M115 (0 если нет). */
+    float batchResPos(int i) const;
+    float batchResOri(int i) const;
+
     /**
      * @brief Проверка, выполняется ли движение в данный момент.
      * @return true если робот движется
@@ -182,6 +220,13 @@ private:
     bool        moving;        // Флаг выполняющегося движения
     bool        chainActive_;  // Предыдущий G1(Q1) доехал: следующий продолжает без останова.
                                // Сбрасывают: moveTo(), M112/любой отказ, clearChain(), старт.
+    // Пакет M450: копятся articular-цели + длительности ног + плановые
+    // расхождения. Исполнение — одной траекторией без остановок.
+    bool        batchOpen_;
+    JointAngles batchPts_[BATCH_MAX];
+    float       batchSegMs_[BATCH_MAX];
+    float       batchRes_[BATCH_MAX][2];  // [i][0]=dPos мм, [i][1]=dOri град
+    int         batchN_;
     char        lastMode[8];   // LIN / SEQ / CART / NONE — кто ехал последним
     char        lastNote[96];  // шаги/время/причина отказа (для M115)
 
@@ -229,4 +274,11 @@ private:
      * Люфт + setAngles + callback, интерполировать нечего.
      */
     void outputStep(const JointAngles &q);
+
+    /**
+     * @brief Оценка длительности ноги пакета (мс) по joint-дельтам
+     * и потолкам maxAngularSpeed (включая гриппер). Та же формула, что
+     * оценка времени в moveToPose. Только для темпа, не для точности.
+     */
+    float legMs(const JointAngles &from, const JointAngles &to, float feedrate);
 };

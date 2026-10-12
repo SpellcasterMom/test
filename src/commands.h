@@ -47,6 +47,8 @@ void handleM426(GCodeCommand &cmd);
 
 void handleM430(GCodeCommand &cmd);
 
+void handleM450(GCodeCommand &cmd);
+
 void handleM500(GCodeCommand &cmd);
 void handleM501(GCodeCommand &cmd);
 void handleM502(GCodeCommand &cmd);
@@ -439,6 +441,24 @@ const CommandDef COMMANDS[] = {
         },
         .paramCount = 1,
         .handler = handleM430,
+    },
+    {
+        .name = "M450",
+        .description = "Waypoint batch: M450 S=1 open, G1s, M450 S=0 execute, M450 S=2 abort",
+        // Пакетный режим декартовых точек (стриминг без остановок):
+        //   S=1 — открыть пакет: следующие G1 (только IK) копятся без движения,
+        //         OK = «принято и провалидировано» (те же ворота 10/15);
+        //   S=0 — закрыть и исполнить всё как одну траекторию (рампы только
+        //         по краям, стыки без останова), в конце общий OK/ERROR;
+        //   S=2 — сбросить пакет без движения (идемпотентно).
+        // Правила: буфер 32 точки (33-я = ERROR + сброс пакета); отказ любой
+        // точки = ERROR + сброс; G0/M104/G28/M108 при открытом пакете = ERROR;
+        // M112 в любой момент = стоп + сброс. Без пакета G1 едет как раньше.
+        .params = {
+            {'S', PARAM_INT, 0, 0},
+        },
+        .paramCount = 1,
+        .handler = handleM450,
     },
 
     // ================================================================

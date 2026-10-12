@@ -4,7 +4,7 @@ Project     : 6DOF arm (CLAW)
 Author      : Vladimir V. Laykov aka Yago
 Alma Mater  : Sevastopol State University
 Date        : 2026-10-05
-Last modify : 2026-10-07
+Last modify : 2026-10-11
 
 Circle demo: TCP рисует круг в наклонной плоскости.
 Круг r=100, центр (230,0,300), нормаль (0.3,0.4,0.87).
@@ -21,17 +21,15 @@ Circle demo: TCP рисует круг в наклонной плоскости.
           No accurate safe IK на дуге (позиция везде <=1мм, падает только
           ориентация) — демо честных ворот 10мм/15°.
 
-Каждый шаг: G1 (+ M115 целиком в лог-файл и dPos/dOri в консоль —
-только в режиме log).
-
-Цепочка блендинга (прошивка feat-blend-g1): все точки кроме последней
-шлются с Q1 — стыки без останова. В режиме log Q1 не ставится
-(M115 нужна устоявшаяся поза).
+Режим исполнения — пакет M450 (прошивка умеет батч):
+  M450 S1 → 24× G1 (копятся: OK = принято+провалидировано) →
+  M450 S0 (исполнить всё одной траекторией без остановок).
+В конце — батч-отчёт M115 (плановые dPos/dOri по точкам).
 
 Использование:
     python demo_circle.py [/dev/ttyUSB0] [tilt|plusx] [log]
-    без log — только движения (G90, G28 H1, круг), без файла и M115;
-    с log — плюс лог-файл и диагностика M115 после каждого шага.
+    без log — только движения, без файла;
+    с log — плюс лог-файл (команды + батч-отчёт M115).
 Требования: pip install pyserial
 """
 
@@ -137,7 +135,9 @@ def find_port():
 
 
 def open_serial(port):
-    """Открытие без сброса ESP32 (как в demo.py): DTR/RTS до open, пауза 15с."""
+    """Открытие без лишнего сброса + СИНХРОНИЗАЦИЯ со стартом контроллера.
+    Возвращает (ser, rebooted). Открытие порта часто ребутит ESP32 —
+    тогда ждём конца boot-драйва, иначе команды уходят в пустоту."""
     print(f"Открываю {port} @ {BAUD} (без сброса ESP32)...")
     ser = serial.Serial()
     ser.port = port
@@ -155,11 +155,53 @@ def open_serial(port):
     except Exception:
         pass
     ser.reset_input_buffer()
-    print("Порт открыт. Ждём 15 сек (setup ESP32)...")
-    time.sleep(15)
+    buf = ""
+    t0 = time.time()
+    rebooted = False
+    while time.time() - t0 < 3.0:
+        buf += ser.read_all().decode(errors="ignore")
+        if "6-DOF Robot Arm Controller" in buf:
+            rebooted = True
+            break
+        time.sleep(0.05)
+    if not rebooted:
+        ser.write(b"M105\n")
+        ser.flush()
+        t0 = time.time()
+        alive = False
+        while time.time() - t0 < 8.0:
+            buf += ser.read_all().decode(errors="ignore")
+            if "Angles:" in buf or "6-DOF Robot Arm Controller" in buf:
+                if "6-DOF Robot Arm Controller" in buf:
+                    rebooted = True
+                else:
+                    alive = True
+                break
+            time.sleep(0.05)
+        if alive:
+            print("Контроллер жив, ребута не было — короткая пауза и едем.")
+            time.sleep(2.0)
+            ser.reset_input_buffer()
+            print("готово.\n")
+            return ser, False
+        print("Живого ответа нет — ждём конца boot-драйва (OK: Home)...")
+        rebooted = True
+    print("Контроллер ребутнулся — ждём конца boot-драйва (OK: Home)...")
+    t0 = time.time()
+    while time.time() - t0 < 90.0:
+        buf += ser.read_all().decode(errors="ignore")
+        if "OK: Home" in buf:
+            break
+        time.sleep(0.1)
+    else:
+        print("Boot не завершился за 90с — вслепую не едем.")
+        ser.close()
+        sys.exit(1)
+    print("Boot готов. Отстой 5с (refresh + калибровка IMU)...")
+    time.sleep(5.0)
     ser.reset_input_buffer()
     print("готово.\n")
-    return ser
+    return ser, True
 
 
 def send(ser, cmd, timeout=120.0):
@@ -180,6 +222,15 @@ def send(ser, cmd, timeout=120.0):
     return False, "TIMEOUT"
 
 
+def m115_raw(ser):
+    """Сырой дамп M115 (не шлёт OK в конце)."""
+    ser.read_all()
+    ser.write(b"M115\n")
+    ser.flush()
+    time.sleep(1.0)
+    return ser.read_all().decode(errors="ignore")
+
+
 def main():
     sys.stdout.reconfigure(line_buffering=True)
     port = PORT or find_port()
@@ -194,73 +245,88 @@ def main():
     print(f"Круг r={R:.0f} в наклонной плоскости, центр=({CX:.0f},{CY:.0f},{CZ:.0f}),")
     print(f"  нормаль={tuple(round(c, 2) for c in _NN)}, пресет={PRESET}, лог={'вкл' if LOG else 'выкл'}")
     if LOG:
-        print(f"  лог M115: {log_path}")
+        print(f"  лог: {log_path}")
         log.write(f"# preset={PRESET} r={R} center=({CX},{CY},{CZ})\n")
-    ser = open_serial(port)
+    ser, rebooted = open_serial(port)
     ser.read_all()
-    ok, err = send(ser, "G90")
-    print("G90:", "OK" if ok else err)
-    if LOG:
-        log.write(f">> G90\n<< {'OK' if ok else err}\n")
-    # Старт всегда из парка: первая точка круга может быть где угодно
-    # (в т.ч. внизу) — без G28 H1 рука сразу ныряет туда из текущей позы.
-    ok, err = send(ser, "G28 H1", timeout=120.0)
-    print("G28 H1:", "OK" if ok else err)
-    if LOG:
-        log.write(f">> G28 H1\n<< {'OK' if ok else err}\n")
-    if not ok:
-        print("Парковка не удалась — круг не запускаю.")
-        if log:
-            log.close()
-        ser.close()
-        sys.exit(1)
-    # ...и сразу раскладываемся в home: декартов трекинг не умеет
-    # стартовать из сложенной позы (конфигурации в 70-200° друг от друга,
-    # гейт 45°/шаг), а парк→home — штатный joint-путь каждого boot (setup).
-    ok, err = send(ser, "G28", timeout=120.0)
-    print("G28:", "OK" if ok else err)
-    if LOG:
-        log.write(f">> G28\n<< {'OK' if ok else err}\n")
-    if not ok:
-        print("Раскладка в home не удалась — круг не запускаю.")
-        if log:
-            log.close()
-        ser.close()
-        sys.exit(1)
-    if LOG:
-        print(f"{'т.':>4} {'dPos':>6} {'dOri':>6}  {'время':>14}  итог")
-    t_start = time.time()
-    n = len(steps)
-    for k, cmd in enumerate(steps):
-        # Блендинг: все точки кроме последней — с Q1 (стыки без останова).
-        # В log-режиме Q1 не ставим: M115 нужна устоявшаяся поза.
-        send_cmd = cmd if LOG or k >= n - 1 else cmd + " Q1"
-        ok, err = send(ser, send_cmd, timeout=60.0)
-        stamp = time.strftime("%H:%M:%S") + f" (+{time.time()-t_start:6.1f}c)"
+
+    def emit(cmd, timeout=120.0):
+        """Отправить + отразить в лог. Возвращает (ok, err)."""
+        ok, err = send(ser, cmd, timeout)
+        print(f"{cmd.split()[0] if ' ' in cmd else cmd}:", "OK" if ok else err)
         if LOG:
-            log.write(f">> {send_cmd}\n")
+            log.write(f">> {cmd}\n<< {'OK' if ok else err}\n")
+        return ok, err
+
+    if not rebooted:
+        # Ребута не было — режим мог остаться REL: G90 явно.
+        # После свежего boot и так ABS — не нужен.
+        ok, _ = emit("G90")
         if not ok:
-            print(f"{k:>4} {'-':>6} {'-':>6}  {stamp}  {err}")
+            print("G90 не прошёл — дальше вслепую не едем.")
+            if log:
+                log.close()
+            ser.close()
+            sys.exit(1)
+    # Старт всегда из парка, затем раскладка в home (декартов трекинг
+    # не стартует из сложенной позы; парк→home — штатный путь boot).
+    try:
+        ok, _ = emit("G28 H1", timeout=180.0)
+        if not ok:
+            print("Парковка не удалась — круг не запускаю.")
+            sys.exit(1)
+        ok, _ = emit("G28", timeout=180.0)
+        if not ok:
+            print("Раскладка в home не удалась — круг не запускаю.")
+            sys.exit(1)
+
+        # Пакет: копим все 24 точки (OK = принято+провалидировано)...
+        ok, err = send(ser, "M450 S1", timeout=30.0)
+        print("M450 S1:", "OK" if ok else err)
+        if LOG:
+            log.write(f">> M450 S1\n<< {'OK' if ok else err}\n")
+        if not ok:
+            print("Пакет не открылся (нужна прошивка с M450) — выхожу.")
+            sys.exit(1)
+        t_start = time.time()
+        for k, cmd in enumerate(steps):
+            ok, err = send(ser, cmd, timeout=60.0)
+            stamp = time.strftime("%H:%M:%S") + f" (+{time.time()-t_start:6.1f}c)"
             if LOG:
-                log.write(f"<< {err}\n")
-            continue
-        if not LOG:
-            print(f"{k:>4}  OK  {stamp}  {send_cmd}")
-            continue
-        ser.read_all()
-        ser.write(b"M115\n")   # M115 не шлёт OK — читаем сырьём
-        time.sleep(1.0)
-        out = ser.read_all().decode(errors="ignore")
-        log.write(out + ("\n" if not out.endswith("\n") else ""))
+                log.write(f">> {cmd}\n<< {'OK' if ok else err}\n")
+            if not ok:
+                print(f"{k:>4}  ERROR {stamp}  {err} — пакет сброшен, выхожу.")
+                sys.exit(1)
+            print(f"{k:>4}  buffered  {stamp}")
+        # ...и исполняем всё одной траекторией без остановок.
+        print("Исполняю пакет...")
+        ok, err = send(ser, "M450 S0", timeout=300.0)
+        print("M450 S0:", "OK" if ok else err)
+        if LOG:
+            log.write(f">> M450 S0\n<< {'OK' if ok else err}\n")
+        if not ok:
+            print("Пакет не доехал — смотрю M115.")
+        out = m115_raw(ser)
+        if LOG:
+            log.write(out + ("\n" if not out.endswith("\n") else ""))
         m = re.search(r"dist=([\d.]+)mm dOri=([\d.]+)deg", out)
-        if m:
-            print(f"{k:>4} {float(m.group(1)):>6.1f} {float(m.group(2)):>6.1f}  {stamp}  OK")
-        else:
-            print(f"{k:>4} {'?':>6} {'?':>6}  {stamp}  moved, no RESIDUAL parsed")
-    if log:
-        log.close()
-        print(f"Лог записан: {log_path}")
-    ser.close()
+        b = re.search(r"BATCH:\s*(\d+)", out)
+        print("M115:", (f"batch {b.group(1)} pts, " if b else "") +
+              (f"dist={m.group(1)}mm dOri={m.group(2)}deg" if m else "без RESIDUAL"))
+    finally:
+        # Ночуем в парке: следующий boot считает руку в G28 H1.
+        # Работает и при обрыве: лишний G28 H1 из парка — no-op.
+        try:
+            ok, err = send(ser, "G28 H1", timeout=180.0)
+            print("Финал G28 H1:", "OK" if ok else err)
+            if LOG:
+                log.write(f">> G28 H1 (финал)\n<< {'OK' if ok else err}\n")
+        except Exception as e:
+            print("Финал: запарковать не вышло:", e)
+        if log:
+            log.close()
+            print(f"Лог записан: {log_path}")
+        ser.close()
 
 
 if __name__ == "__main__":
