@@ -461,9 +461,6 @@ const CommandDef COMMANDS[] = {
         .paramCount = 1,
         .handler = handleM450,
     },
-        .paramCount = 1,
-        .handler = handleM450,
-    },
 
     // ================================================================
     // M-команды: EEPROM (постоянное хранилище)
