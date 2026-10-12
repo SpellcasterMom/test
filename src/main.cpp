@@ -378,6 +378,11 @@ static void setupHardware() {
     storage.begin();
 }
 
+// Форварды фазников (определения ниже, порядок в файле не меняли).
+static void setupConfig();
+static void setupHome();
+static void setupCalibAndTasks();
+
 void setup() {
     setupHardware();      // Serial/дисплей/мьютексы/железо/связи модулей
     setupConfig();        // EEPROM + FW-миграция + зоны + проверка home
