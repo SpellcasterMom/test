@@ -194,7 +194,22 @@ struct BatchProf {
 
 // Определения ниже (после outputStep); здесь — только для batchExecute.
 static float chainEase(float t, float rIn, float rOut, float V);
-static BatchProf batchProfFor(bool rampIn, bool rampOut, int steps);
+static BatchProf batchProfFor(bool rampIn, bool rampOut, int steps) {
+    BatchProf p{false, 0.0f, 0.0f, 1.0f};
+    if (!rampIn && !rampOut) {
+        p.trap = true;  // круиз: chainEase с нулевыми рампами = e(t)=t
+        return p;
+    }
+    if (steps < 6) return p;  // кроха — legacy стоп-профиль
+    int rSteps = (int)(steps * CHAIN_RAMP_FRAC + 0.5f);
+    if (rSteps < 2) rSteps = 2;
+    if (2 * rSteps >= steps) return p;  // вырожденный — legacy
+    p.trap = true;
+    p.rIn = rampIn ? (float)rSteps / (float)steps : 0.0f;
+    p.rOut = rampOut ? (float)rSteps / (float)steps : 0.0f;
+    p.V = 1.0f / (1.0f - p.rIn * 0.5f - p.rOut * 0.5f);
+    return p;
+}
 
 // ============================================================================
 // Поток точек M450: планирование отдельно (core0Task), исполнение отдельно
