@@ -115,7 +115,6 @@ bool MotionInterpolator::batchBegin() {
     // Исполнитель гарантированно в IDLE (иначе streamBusy).
     planSeq_ = 0;
     execSeq_ = 0;
-    streamPlanned_ = 0;
     chunkN_ = 0;
     planTailValid_ = false;
     dropSeq_ = 0;
@@ -181,7 +180,6 @@ bool MotionInterpolator::batchAdd(const JointAngles &q, float feedrate,
     planTail_ = q;
     planTailValid_ = true;
     planSeq_++;
-    streamPlanned_++;
     int d = streamDepth();
     if (d > depthMax_) depthMax_ = d;
     return true;
@@ -213,10 +211,6 @@ void MotionInterpolator::batchAbort() {
     batchOpen_ = false;
     streamAbortReq_ = true;
     dropSeq_ = planSeq_;  // всё непотреблённое — сброшено (для статуса чанков)
-}
-
-void MotionInterpolator::execTrampoline(void *arg) {
-    ((MotionInterpolator *)arg)->execLoop();
 }
 
 void MotionInterpolator::execLoop() {

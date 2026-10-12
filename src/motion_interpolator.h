@@ -370,4 +370,10 @@ private:
      * оценка времени в moveToPose. Только для темпа, не для точности.
      */
     float legMs(const JointAngles &from, const JointAngles &to, float feedrate);
+
+    /** Трамплина задачи исполнителя (FreeRTOS хочет свободную функцию). */
+    static void execTrampoline(void *arg);
+
+    /** Цикл задачи исполнителя: дрен кольца строгим кадансом (Core1). */
+    void execLoop();
 };
