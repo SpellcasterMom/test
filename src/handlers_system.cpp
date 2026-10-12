@@ -21,11 +21,19 @@
  *   M119          — живые: наклон, последние counts, bias, пики, счётчик
  *   M119 S=1      — дамп кольца текстом (#IMU строки + OK в конце)
  *   M119 S=1 D=4  — дамп каждого 4-го сэмпла (быстрее)
+ *   M119 S=2      — живой поток #IMU (тоггл): сэмплы идут сразу, только
+ *                   при движении; гаснет повторным S=2 или M112
  */
 void handleM119(GCodeCommand &cmd) {
     if (!imuLogger.hasGyro() && !imuLogger.hasAcc()) {
         Serial.println("IMU: none (GY-80 not found)");
         Serial.println("OK");
+        return;
+    }
+    int sVal = cmd.hasParam['S' - 'A'] ? (int)cmd.params['S' - 'A'] : 0;
+    if (sVal == 2) {
+        imuLogger.setLive(!imuLogger.isLive());
+        Serial.println(imuLogger.isLive() ? "OK: live on" : "OK: live off");
         return;
     }
     bool dump = cmd.hasParam['S' - 'A'] && cmd.params['S' - 'A'] != 0.0f;
@@ -97,6 +105,7 @@ void handleM114(GCodeCommand &cmd) {
 void handleM112(GCodeCommand &cmd) {
     interpolator.stop();
     servoCtrl.disable();
+    imuLogger.setLive(false);  // живой поток тоже гасим
     Serial.println("OK: Emergency stop");
 }
 

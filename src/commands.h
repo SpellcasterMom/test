@@ -209,10 +209,11 @@ const CommandDef COMMANDS[] = {
     },
     {
         .name = "M119",
-        .description = "IMU telemetry: M119 [S=1 dump] [D=4 decimate]",
+        .description = "IMU telemetry: M119 [S=1 dump] [S=2 live] [D=4 decimate]",
         // Параметры M119:
         //   без параметров — живые значения (наклон, counts, bias, пики);
         //   S=1 — дамп кольца последнего движения (#IMU строки + OK);
+        //   S=2 — живой поток #IMU (тоггл; только при движении; M112 гасит);
         //   D=N — печатать каждый N-й сэмпл (быстрее).
         //       Пример: M119 S=1 D=4 — дамп с децимацией 4
         .params = {

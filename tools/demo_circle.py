@@ -205,7 +205,9 @@ def open_serial(port):
     return ser, True
 
 
-def send(ser, cmd, timeout=120.0):
+def send(ser, cmd, timeout=120.0, imu_log=None):
+    """Послать команду, ждать OK/ERROR. imu_log (файл, LOG-режим): пролетающие
+    мимо #IMU-строки живого режима — туда же (иначе потеряются)."""
     ser.read_all()  # сброс несъеденного
     ser.write((cmd + "\n").encode())
     ser.flush()
@@ -213,13 +215,24 @@ def send(ser, cmd, timeout=120.0):
     buf = ""
     while time.time() - t0 < timeout:
         buf += ser.read_all().decode(errors="ignore")
-        for line in buf.split("\n"):
+        while "\n" in buf:
+            line, buf = buf.split("\n", 1)
             s = line.strip()
+            if imu_log is not None and s.startswith("#IMU"):
+                imu_log.write(s + "\n")
             if s == "OK" or s.startswith("OK:"):
                 return True, ""
             if s.startswith("ERROR"):
                 return False, s
         time.sleep(0.05)
+    # Хвост без перевода строки (прошивка всегда шлёт \n, но дёшево проверить).
+    # #IMU тут не пишем: оборванная строка испортит лог, а целый ответ
+    # мы бы уже разобрали выше.
+    s = buf.strip()
+    if s == "OK" or s.startswith("OK:"):
+        return True, ""
+    if s.startswith("ERROR"):
+        return False, s
     return False, "TIMEOUT"
 
 
@@ -292,6 +305,14 @@ def main():
         if not ok:
             print("Поток не открылся (нужна прошивка со стримингом) — выхожу.")
             sys.exit(1)
+        if LOG:
+            # Живой гироскоп на время круга: пишется только при движении,
+            # гаснет повторным S=2 в конце. Строки ловим ниже, в ожидании S0.
+            live_on = False
+            ok_live, err_live = send(ser, "M119 S=2", timeout=30.0)
+            print("M119 S=2 (live):", "OK" if ok_live else err_live)
+            log.write(f">> M119 S=2\n<< {'OK' if ok_live else err_live}\n")
+            live_on = ok_live
         for k, cmd in enumerate(steps):
             ok, err = send(ser, cmd, timeout=120.0)
             stamp = time.strftime("%H:%M:%S") + f" (+{time.time()-t_start:6.1f}c)"
@@ -302,11 +323,17 @@ def main():
                 sys.exit(1)
             print(f"{k:>4}  buffered  {stamp}")
         # Барьер: докачать, исполнить всё без остановок, встать.
+        # В LOG-режиме пролетающие #IMU живого режима — в тот же лог.
         print("Исполняю поток...")
-        ok, err = send(ser, "M450 S0", timeout=300.0)
+        ok, err = send(ser, "M450 S0", timeout=300.0, imu_log=log if LOG else None)
         print("M450 S0:", "OK" if ok else err)
         if LOG:
             log.write(f">> M450 S0\n<< {'OK' if ok else err}\n")
+            if live_on:
+                ok_live, err_live = send(ser, "M119 S=2", timeout=30.0)
+                print("M119 S=2 (live off):", "OK" if ok_live else err_live)
+                log.write(f">> M119 S=2\n<< {'OK' if ok_live else err_live}\n")
+                live_on = False
         if not ok:
             print("Поток не доехал — смотрю M115.")
             nok = False
@@ -321,6 +348,15 @@ def main():
             print("Круг не докатан — дальше вслепую не едем.")
             sys.exit(1)
     finally:
+        # Живой режим гасим до финала (иначе парковка тоже польётся в эфир
+        # и останется включённым после выхода). live_on может не существовать
+        # при раннем обрыве — через locals().
+        try:
+            if LOG and locals().get("live_on"):
+                send(ser, "M119 S=2", timeout=30.0)
+                log.write(">> M119 S=2 (live off, финал)\n")
+        except Exception as e:
+            print("Финал: live не погашен:", e)
         # Ночуем в парке: следующий boot считает руку в G28 H1.
         # Работает и при обрыве: лишний G28 H1 из парка — no-op.
         try:

@@ -24,6 +24,10 @@
  *   - задача Core 1, 200 Гц: burst-чтение, фьюжн, пики, запись в кольцо
  *     пока интерполятор в движении (опрос isMoving, сброс кольца если
  *     между движениями пауза > 1 с — вейпоинты одного G0 не рвут запись);
+ *   - метки точек потока: опрос следит за сиквенсом исполнителя
+ *     (streamConsumed) — каждый поп метится битом 1, вход в hold — битом 2;
+ *   - живой режим M119 S=2: печать сэмплов сразу (только при движении),
+ *     гасится повторным S=2 или M112;
  *   - M119: живые значения + пики; M119 S=1 [D=n]: дамп кольца текстом.
  *
  * В кольце — сырые counts (перевод в единицы на хосте по #SCALE-строке
@@ -52,7 +56,8 @@ struct ImuSample {
     uint32_t t;                       // millis() взятия
     int16_t  ax, ay, az;              // аксель, counts
     int16_t  gx, gy, gz;              // гиро, counts (bias НЕ вычтен — вычитает хост)
-    uint16_t flags;                   // бит0 = старт записи, бит1 = хоп вейпоинта
+    uint16_t flags;                   // бит0 = старт записи, бит1 = вейпоинт,
+                                      // бит2 = вход в hold (голодание стрима)
 };  // 18 байт (было 16 — метки того стоят)
 
 class ImuLogger {
@@ -83,6 +88,8 @@ public:
     uint32_t markCount() const { return marks_; }
     void setHold(bool h);  // заморозить запись на время DUMP (рвёт tearing)
     void dump(uint8_t decim);  // печать кольца в Serial, старое → новое
+    void setLive(bool on) { live_ = on; }  // живой режим M119 S=2 (тоггл/S2/M112)
+    bool isLive() const { return live_; }
     uint32_t busFails() const { return busFails_; }
     uint32_t busRecovers() const { return recovers_; }
 
@@ -121,5 +128,10 @@ private:
     bool wasMoving_ = false;
     bool pendingMark_ = false;  // следующий сэмпл пометить хопом
     bool pendingIsStart_ = true;  // true = метка старта (бит0), false = вейпоинт (бит1)
+    bool pendingHold_ = false;  // следующий сэмпл пометить входом в hold (бит2)
+    bool live_ = false;  // живой режим M119 S=2: печатать сэмплы сразу (только при движении)
+    uint32_t lastSeq_ = 0;  // последний виденный сиквенс исполнителя
+    bool seqInit_ = false;  // трекинг сиквенсов заведён
+    bool wasHolding_ = false;  // прошлое состояние hold (фронт для метки)
     uint32_t lastEndMs_ = 0;
 };

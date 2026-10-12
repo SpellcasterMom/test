@@ -227,6 +227,24 @@ void ImuLogger::poll() {
     recording_ = mv;
     if (!mv && wasMoving_) lastEndMs_ = now;
     wasMoving_ = mv;
+    // Метки потока M450: следим за сиквенсом исполнителя (тот же Core 1 —
+    // гонки нет, в худшем случае метка съедет на один сэмпл 5мс).
+    // Каждый поп — бит1; вход в hold — бит2 (отличаем простой от езды).
+    // Вне потока сиквенс стоит — меток нет. Откат сиквенса (новый поток) —
+    // просто перезахват, стартовая метка придёт переходом выше.
+    if (interp_) {
+        uint32_t sq = interp_->streamConsumed();
+        if (!seqInit_ || sq < lastSeq_) {
+            lastSeq_ = sq;
+            seqInit_ = true;
+        } else if (sq != lastSeq_) {
+            lastSeq_ = sq;
+            if (mv) { pendingMark_ = true; pendingIsStart_ = false; }
+        }
+        bool holding = (interp_->streamState() == MotionInterpolator::ST_HOLDING);
+        if (holding && !wasHolding_ && mv) pendingHold_ = true;
+        wasHolding_ = holding;
+    }
     if (!mv || hold_) return;
 
     if (!imuTake(50)) return;  // шина занята сервами — сэмпл пропускаем
@@ -257,6 +275,11 @@ void ImuLogger::poll() {
         marks_++;
         pendingMark_ = false;
     }
+    if (pendingHold_) {
+        s.flags |= 0x04;
+        marks_++;
+        pendingHold_ = false;
+    }
     last_[0] = s.ax; last_[1] = s.ay; last_[2] = s.az;
     last_[3] = s.gx; last_[4] = s.gy; last_[5] = s.gz;
 
@@ -281,6 +304,16 @@ void ImuLogger::poll() {
     prevAccValid_ = true;
 
     push(s);
+    // Живой режим M119 S=2: та же строка, что в дампе, — сразу в Serial.
+    // Сюда доходят лишь при mv && !hold_ (гейт выше), т.е. пишем строго
+    // при движении. Поток Serial делим с core0Task, printf атомарен.
+    if (live_) {
+        Serial.printf("#IMU t=%lu ax=%d ay=%d az=%d gx=%d gy=%d gz=%d f=%u\n",
+                      (unsigned long)s.t,
+                      (int)s.ax, (int)s.ay, (int)s.az,
+                      (int)s.gx, (int)s.gy, (int)s.gz,
+                      (unsigned)s.flags);
+    }
 }
 
 void ImuLogger::taskTrampoline(void *arg) {
