@@ -392,7 +392,7 @@ static void diagPrintJoints(const Vec3 joints[7]) {
  */
 void handleG0(GCodeCommand &cmd) {
     // Пакет M450 копит только G1: движение тут разорвало бы траекторию.
-    if (interpolator.batchOpen()) {
+    if (interpolator.batchOpen() || interpolator.streamBusy()) {
         Serial.println("ERROR: batch open - close it first (M450 S0)");
         return;
     }
@@ -865,13 +865,13 @@ void handleG1(GCodeCommand &cmd) {
             interpolator.batchAbort();
             xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
             sharedState.hasError = true;
-            snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Batch full");
+            snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Stream stalled");
             xSemaphoreGive(displayMutex);
-            Serial.println("ERROR: batch full (64 max), flushed - send in chunks");
+            Serial.println("ERROR: stream stalled/aborted, flushed");
             return;
         }
-        Serial.printf("OK: buffered %d/%d\n",
-                      interpolator.batchCount(), MotionInterpolator::BATCH_MAX);
+        Serial.printf("OK: buffered (depth=%d/%d)\n",
+                      interpolator.streamDepth(), MotionInterpolator::STREAM_DEPTH);
         return;
     }
 
@@ -950,7 +950,7 @@ void handleG1(GCodeCommand &cmd) {
  * G28 — перемещение в домашнюю позицию (home).
  */
 void handleG28(GCodeCommand &cmd) {
-    if (interpolator.batchOpen()) {
+    if (interpolator.batchOpen() || interpolator.streamBusy()) {
         Serial.println("ERROR: batch open - close it first (M450 S0)");
         return;
     }
@@ -1051,7 +1051,7 @@ void handleG91(GCodeCommand &cmd) {
  * умолчанию DEFAULT_FEEDRATE.
  */
 void handleM104(GCodeCommand &cmd) {
-    if (interpolator.batchOpen()) {
+    if (interpolator.batchOpen() || interpolator.streamBusy()) {
         Serial.println("ERROR: batch open - close it first (M450 S0)");
         return;
     }
@@ -1155,7 +1155,7 @@ void handleM105(GCodeCommand &cmd) {
  * Едет только сустав 6 через тот же interpolator, что M104.
  */
 void handleM108(GCodeCommand &cmd) {
-    if (interpolator.batchOpen()) {
+    if (interpolator.batchOpen() || interpolator.streamBusy()) {
         Serial.println("ERROR: batch open - close it first (M450 S0)");
         return;
     }
@@ -1322,16 +1322,33 @@ void handleM115(GCodeCommand &cmd) {
                           diagLast.detourPts[i].z);
         }
     }
-    // Пакет M450: плановые расхождения точек (замерены при накоплении,
-    // рантайм детерминирован — перемерять нечего). Пусто = пакета не было.
+    // Поток M450: виталы кольца + таблица авто-чанков. Пусто = потока не было.
     {
-        int bn = interpolator.batchCount();
-        if (bn > 0) {
-            Serial.printf("BATCH: %d pts\n", bn);
-            for (int i = 0; i < bn; i++) {
-                Serial.printf("  [%d] dPos=%.1fmm dOri=%.1fdeg\n", i,
-                              interpolator.batchResPos(i),
-                              interpolator.batchResOri(i));
+        MotionInterpolator::StreamState st = interpolator.streamState();
+        const char *stName = "?";
+        if (st == MotionInterpolator::ST_IDLE) stName = "IDLE";
+        else if (st == MotionInterpolator::ST_FILLING) stName = "FILLING";
+        else if (st == MotionInterpolator::ST_RUNNING) stName = "RUNNING";
+        else if (st == MotionInterpolator::ST_HOLDING) stName = "HOLDING";
+        Serial.printf("STREAM: state=%s depth=%d/%d maxDepth=%d starved=%lu holdsMs=%lu maxStep=%lu\n",
+                      stName, interpolator.streamDepth(), MotionInterpolator::STREAM_DEPTH,
+                      interpolator.streamDepthMax(),
+                      (unsigned long)interpolator.streamStarved(),
+                      (unsigned long)interpolator.streamHoldsMs(),
+                      (unsigned long)interpolator.streamMaxStep());
+        int cn = interpolator.chunkCount();
+        if (cn > 0) {
+            uint32_t consumed = interpolator.streamConsumed();
+            uint32_t drop = interpolator.streamDropSeq();
+            Serial.printf("CHUNKS: %d\n", cn);
+            for (int i = 0; i < cn; i++) {
+                MotionInterpolator::ChunkRow row;
+                if (!interpolator.chunkRow(i, row)) break;
+                const char *rst = "active";
+                if (row.startSeq + row.n <= consumed) rst = "done";
+                else if (drop > 0 && row.startSeq >= drop) rst = "dropped";
+                Serial.printf("  [%d] n=%d worst=%.1fmm/%.1fdeg %s\n", i,
+                              row.n, row.worstPos, row.worstOri, rst);
             }
         }
     }
@@ -1552,23 +1569,22 @@ void handleM430(GCodeCommand &cmd) {
 void handleM450(GCodeCommand &cmd) {
     int s = cmd.hasParam['S' - 'A'] ? (int)cmd.params['S' - 'A'] : 0;
     if (s == 1) {
-        if (interpolator.batchOpen()) {
-            Serial.println("ERROR: batch already open (M450 S0/S2 first)");
+        if (!interpolator.batchBegin()) {
+            Serial.println("ERROR: stream busy (S0/S2 first)");
             return;
         }
-        interpolator.batchBegin();
-        Serial.println("OK: batch open (64 max)");
+        Serial.println("OK: stream open (180 max, backpressure by late OK)");
     } else if (s == 0) {
         if (!interpolator.batchOpen()) {
-            Serial.println("ERROR: no open batch (M450 S1 first)");
+            Serial.println("ERROR: no open stream (M450 S1 first)");
             return;
         }
-        if (interpolator.batchCount() == 0) {
+        if (interpolator.streamPlanned() == 0) {
             interpolator.batchAbort();
-            Serial.println("ERROR: empty batch, flushed");
+            Serial.println("ERROR: empty stream, flushed");
             return;
         }
-        int n = interpolator.batchCount();
+        uint32_t n = interpolator.streamPlanned();
         if (interpolator.batchExecute()) {
             xSemaphoreTake(angleMutex, portMAX_DELAY);
             JointAngles done = interpolator.getCurrentAngles();
@@ -1586,7 +1602,7 @@ void handleM450(GCodeCommand &cmd) {
             sharedState.hasError = false;
             sharedState.commandCount++;
             xSemaphoreGive(displayMutex);
-            Serial.printf("OK: batch done (%d pts)\n", n);
+            Serial.printf("OK: stream done (%lu pts)\n", (unsigned long)n);
         } else {
             xSemaphoreTake(angleMutex, portMAX_DELAY);
             JointAngles done = interpolator.getCurrentAngles();
@@ -1594,9 +1610,9 @@ void handleM450(GCodeCommand &cmd) {
             xSemaphoreGive(angleMutex);
             xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
             sharedState.hasError = true;
-            snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Batch failed");
+            snprintf(sharedState.lastError, sizeof(sharedState.lastError), "Stream failed");
             xSemaphoreGive(displayMutex);
-            Serial.println("ERROR: batch failed (see M115 INTERP)");
+            Serial.println("ERROR: stream failed (see M115 INTERP)");
         }
     } else if (s == 2) {
         interpolator.batchAbort();
@@ -2028,8 +2044,10 @@ void setup() {
 
     // Ручной пульт: штурвал + NEXT + E-STOP (задача, опрос 20 мс).
     // При JOG_ENABLED=false — только лог, прерывания не вешаются.
+    // Core0: на Core1 живут исполнитель потока + IMU, пульту там не место
+    // (E-STOP всё равно через прерывание, от ядра не зависит).
     pendant.begin(&interpolator, &currentAngles, angleMutex);
-    xTaskCreatePinnedToCore(pendantTask, "pendant", 4096, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(pendantTask, "pendant", 4096, NULL, 2, NULL, 0);
     Serial.println(JOG_ENABLED ? "Jog pendant: ON (pins 32/33/25), E-STOP armed (pin 26)"
                                : "Jog pendant: manual OFF, E-STOP armed (pin 26)");
     Serial.println(JOG_ENABLED ? "Jog pendant: ON (pins 32/33/25/26)"
@@ -2101,9 +2119,13 @@ void setup() {
     }
     imuLogger.startTask();  // опрос 200 Гц на Core 1 (после калибровки!)
 
-    // Создание задач
+    // Создание задач.
+    // Раскладка ядер: Core1 = исполнитель потока + IMU (движение и гиро
+    // рядом, как договаривались); всё остальное — Core0. Дисплей уехал
+    // с Core1, чтобы 200мс-отрисовки не дёргали каданс исполнителя.
+    interpolator.startExecTask();  // stream_exec, Core1, приор. 2 (= IMU)
     xTaskCreatePinnedToCore(core0Task, "Core0_Motion",  8192, NULL, 1, &core0TaskHandle, 0);
-    xTaskCreatePinnedToCore(core1Task, "Core1_Display", 8192, NULL, 1, &core1TaskHandle, 1);
+    xTaskCreatePinnedToCore(core1Task, "Core0_Display", 8192, NULL, 1, &core1TaskHandle, 0);
 
     Serial.println("Ready. Send G-code commands.");
     Serial.println("Type '?' for help");

@@ -16,6 +16,9 @@
 #include "backlash_compensator.h"
 #include "safety_checker.h"
 #include "ik_solver.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
 
 /**
  * Тип callback-функции, вызываемой на каждом шаге интерполяции.
@@ -141,46 +144,113 @@ public:
     /** Разорвать цепочку (M112/отказ/смена режима делают это сами). */
     void clearChain() { chainActive_ = false; }
 
-    // --- Пакет точек (M450/G5-стриминг) ---
-    // 64 точки (~2.3 КБ статики): круг 24 влезает с запасом, чанки демо
-    // режутся по 60. Больше — хост шлёт несколькими пакетами (fail-fast
-    // ниже не даёт молча потерять точки).
-    static constexpr int BATCH_MAX = 64;
+    // --- Поток точек M450 (стриминг) ---
+    // Планировщик (core0Task) считает IK заранее и кладёт joint-позы
+    // в кольцо; исполнитель (своя задача, Core1) дренирует его строгим
+    // кадансом 20мс. ШИМ не останавливается на время счёта никогда.
+    // Backpressure: кольцо полное → OK хосту придерживается (ждём слота
+    // со сниффом M112), а не ERROR. Пустой дрен → hold-and-resume.
+    static constexpr int STREAM_DEPTH = 180;  // слотов (~3 чанка, ~7 КБ heap)
+    static constexpr int STREAM_CHUNK = 60;   // авто-чанк для учёта/диагностики
+    static constexpr int STREAM_KICK = 3;     // старт дрена при глубине >= 3
+    static constexpr int CHUNK_ROWS = 8;      // строк таблицы чанков (кольцо)
 
-    /** Открыт ли пакет (между M450 S1 и S0). */
+    /** Состояние исполнителя (пишет исполнитель, читают все). */
+    enum StreamState : uint8_t {
+        ST_IDLE,     // потока нет
+        ST_FILLING,  // копим, дрен не стартовал (глубина < KICK)
+        ST_RUNNING,  // дренаж идёт
+        ST_HOLDING,  // голодание: стоим, ждём докачки
+    };
+
+    /** Слот кольца: спланированная нога (позиции + длительность). */
+    struct StreamWp {
+        JointAngles q;    // articular-цель ноги
+        float segMs;      // длительность ноги, мс
+        float dPos;       // плановое расхождение, мм (для M115)
+        float dOri;       // плановое расхождение, град (для M115)
+        uint32_t seq;     // сквозной номер (учёт чанков/потребления)
+    };
+
+    /** Строка учёта авто-чанка (пишет только планировщик). */
+    struct ChunkRow {
+        uint32_t startSeq;  // сиквенс первой точки
+        uint16_t n;         // точек в чанке
+        float worstPos;     // худшее плановое dPos, мм
+        float worstOri;     // худшее плановое dOri, град
+    };
+
+    /** Открыт ли приём (между M450 S1 и S0/S2). */
     bool batchOpen() const { return batchOpen_; }
 
-    /** Сколько точек уже накоплено. */
-    int batchCount() const { return batchN_; }
+    /** Глубина кольца сейчас (0 если очереди нет). */
+    int streamDepth() const;
 
-    /** Последняя накопленная точка (для continuity-выбора следующей).
-     * @return false если пакет пуст (q не тронут). */
+    /** Состояние исполнителя (для M115 и гардов). */
+    StreamState streamState() const { return streamState_; }
+
+    /** Занят ли исполнитель дреном (RUNNING/HOLDING). */
+    bool streamBusy() const {
+        return streamState_ == ST_RUNNING || streamState_ == ST_HOLDING;
+    }
+
+    /** Последняя спланированная точка (continuity следующей).
+     * @return false если в текущем потоке ещё ничего нет. */
     bool batchPrevPt(JointAngles &q) const {
-        if (batchN_ <= 0) return false;
-        q = batchPts_[batchN_ - 1];
+        if (!planTailValid_) return false;
+        q = planTail_;
         return true;
     }
 
-    /** M450 S1: открыть пакет (сбросить накопленное). */
+    /** M450 S1: открыть поток. Только из IDLE, иначе false. */
     bool batchBegin();
 
-    /** Положить точку в пакет (валидация — на вызывающем, здесь только слот).
-     * @param q articular цель (7 углов), segMs длительность ноги (мс),
-     *        dPos/dOri плановые расхождения для отчёта M115.
-     * @return false если пакет переполнен (состояние не меняется). */
-    bool batchAdd(const JointAngles &q, float segMs, float dPos, float dOri);
+    /** Положить точку (валидация — на вызывающем).
+     * Backpressure: кольцо полное → ждём слота (снифф M112, колпак 60с),
+     * OK хосту уходит только по факту записи.
+     * @return false при аборте/таймауте (поток уже сброшен). */
+    bool batchAdd(const JointAngles &q, float feedrate,
+                  float dPos, float dOri);
 
-    /** M450 S0: закрыть и исполнить весь пакет как одну траекторию.
-     * Рампы только по краям (первая/последняя нога), стыки без останова.
-     * @return true если всё доехало; иначе стоп на последней хорошей точке. */
+    /** M450 S0: барьер — докачать, исполнить всё, встать. Блокирует
+     * вызывающего до конца дрена (со сниффом M112).
+     * @return true если всё доехало. */
     bool batchExecute();
 
-    /** M450 S2 / M112: сбросить пакет без движения (идемпотентно). */
+    /** M450 S2 / M112: сбросить поток без движения (идемпотентно). */
     void batchAbort();
 
-    /** Плановые расхождения точки i для отчёта M115 (0 если нет). */
-    float batchResPos(int i) const;
-    float batchResOri(int i) const;
+    /** Сколько чанков учтено (валидных строк, <= CHUNK_ROWS). */
+    int chunkCount() const { return chunkN_ < CHUNK_ROWS ? chunkN_ : CHUNK_ROWS; }
+
+    /** Строка чанка i (0..chunkCount-1, от старых к новым).
+     * @return false если нет такой. */
+    bool chunkRow(int i, ChunkRow &row) const {
+        int valid = chunkCount();
+        if (i < 0 || i >= valid) return false;
+        row = chunks_[(chunkN_ - valid + i) % CHUNK_ROWS];
+        return true;
+    }
+
+    /** Сколько точек исполнитель потребил (монотонно в пределах потока). */
+    uint32_t streamConsumed() const { return execSeq_; }
+
+    /** Ватермарка сброса: сиквенсы >= неё сброшены (для статуса чанков). */
+    uint32_t streamDropSeq() const { return dropSeq_; }
+
+    /** Счётчик голоданий / суммарный hold, мс / макс. превышение шага, мс. */
+    uint32_t streamStarved() const { return starved_; }
+    uint32_t streamHoldsMs() const { return holdsMs_; }
+    uint32_t streamMaxStep() const { return maxStepMs_; }
+
+    /** High-water глубины кольца. */
+    int streamDepthMax() const { return depthMax_; }
+
+    /** Сколько точек принято в текущем потоке (монотонно до S1). */
+    uint32_t streamPlanned() const { return planSeq_; }
+
+    /** Создать задачу исполнителя (setup, один раз). Core1, приоритет 2. */
+    void startExecTask();
 
     /**
      * @brief Проверка, выполняется ли движение в данный момент.
@@ -223,13 +293,29 @@ private:
     bool        moving;        // Флаг выполняющегося движения
     bool        chainActive_;  // Предыдущий G1(Q1) доехал: следующий продолжает без останова.
                                // Сбрасывают: moveTo(), M112/любой отказ, clearChain(), старт.
-    // Пакет M450: копятся articular-цели + длительности ног + плановые
-    // расхождения. Исполнение — одной траекторией без остановок.
-    bool        batchOpen_;
-    JointAngles batchPts_[BATCH_MAX];
-    float       batchSegMs_[BATCH_MAX];
-    float       batchRes_[BATCH_MAX][2];  // [i][0]=dPos мм, [i][1]=dOri град
-    int         batchN_;
+    // Поток M450: очередь — единственный кросс-ядерный канал
+    // (планировщик core0Task пишет, исполнитель Core1 читает).
+    // Остальное — однописательное: планировщик (core0) пишет счётчики
+    // плана и таблицу чанков; исполнитель — consumed/счётчики/состояние
+    // (volatile, читает M115 и гарды).
+    QueueHandle_t streamQ_;       // слоты StreamWp (SPSC по построению)
+    TaskHandle_t  execTask_;      // задача исполнителя (nullptr до старта)
+    volatile bool batchOpen_;     // приём точек открыт (S1..S0/S2)
+    volatile bool streamClosing_; // S0: докачать, встать, закрыть
+    volatile bool streamAbortReq_;  // stop()/ISR: сбросить при первой возможности
+    volatile StreamState streamState_;
+    volatile uint32_t planSeq_;   // следующий сиквенс планировщика
+    volatile uint32_t execSeq_;   // следующий сиквенс исполнителя (=потреблено)
+    volatile uint32_t starved_;   // счётчик голоданий
+    volatile uint32_t holdsMs_;   // суммарный hold, мс
+    volatile uint32_t maxStepMs_;  // макс. превышение шага над 20мс
+    volatile int depthMax_;       // high-water глубины
+    volatile uint32_t dropSeq_;   // сиквенсы >= этого сброшены (для статуса чанков)
+    volatile bool execOk_;        // дрен завершился чисто (читает S0-барьер)
+    JointAngles planTail_;        // последняя спланированная точка
+    bool        planTailValid_;   // (только планировщик)
+    ChunkRow    chunks_[CHUNK_ROWS];  // таблица авто-чанков (только планировщик)
+    int         chunkN_;          // строк учтено (<= CHUNK_ROWS, кольцо по модулю)
     char        lastMode[8];   // LIN / SEQ / CART / NONE — кто ехал последним
     char        lastNote[96];  // шаги/время/причина отказа (для M115)
 
