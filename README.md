@@ -281,7 +281,7 @@ src/
   fk_solver.h/.cpp        — прямая кинематика (DH)
   ik_solver.h/.cpp        — обратная кинематика (геометрия + DLS)
   servo_controller.h/.cpp — PCA9685, math→ШИМ, инверсии, i2cMutex
-  motion_interpolator.h/.cpp — интерполяция (LIN/SEQ/AUTO/CART), метки M115
+  motion_interpolator.h/.cpp — интерполяция (LIN/SEQ/AUTO/CART) + Q1-блендинг стыков (chainEase), метки M115
   safety_checker.h/.cpp   — workspace, зоны, zMin, links (skipLink 0)
   backlash_compensator.h/.cpp — компенсация люфта
   gripper_controller.h/.cpp — захват (P7, проценты)
@@ -289,15 +289,21 @@ src/
   eeprom_storage.h/.cpp   — blob конфигурации + FW-миграция
   detour_planner.h/.cpp   — объезд (via + RRT, детерминированный)
   jog_pendant.h/.cpp      — ручной пульт (штурвал/NEXT/E-STOP)
-  imu_logger.h/.cpp       — GY-80: опрос 200 Гц, фьюжн, кольцо, M119
+  imu_logger.h/.cpp       — GY-80: опрос 200 Гц, фьюжн, кольцо 1024 (~5 с), M119
 tools/ — раннеры Serial + TCP-клиент + двойник (подробно: tools/README.md)
   jogger.py (клавиатурный джог P1–P7, 0=все в 0, ~=M105),
   tcp_console.py (G-code по TCP-мосту),
   demo_circle.py (tilt/plusx пресеты + лог M115),
-  demo_endpoint.py, demo.py
+  demo_endpoint.py, demo.py,
+  make_deck.py (вне master, незакоммичен)
+  twin/ — двойник FK/IK 1:1 (solve.py/fk.py/ik.py/detour.py/verify_low.py/fit3.py… — полный список в tools/README.md)
 docs/ — robot1.jpg (чертёж), MATH.md + MATH.docx (записка),
   FLOW.md + FLOW.vdx (схемы для Visio), KINEMATICS.md (референс)
+  @eaDir/ — служебный мусор Synology, не коммитить
 cad/ — STEP-каталог Models/ (коннекторы, приводы big/small + роторы,
-  base + base_rotor) + reach.stl/dex_*.stl (конверты), cad/README.md
+  base + base_rotor) + reach.stl/dex_*.stl/base_column.stl (конверты), cad/README.md
+platformio.ini — сборка/заливка (monitor_speed синхронна с SERIAL_BAUD)
+TODO.md — техдолг (самоколлизии, длинные потоки…)
 agent.md — рабочие соглашения (ветки, шапки, I2C-правила, стиль)
+mcp/ — вне master: файлы соседней сессии, не трогать
 ```
