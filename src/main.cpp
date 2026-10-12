@@ -309,7 +309,13 @@ static int scanGY80() {
     return mask;
 }
 
-void setup() {
+// ====================================================================
+// Фазы setup() (ветка ref-setup-split): тот же код построчно, только
+// нарезанный. Порядок вызовов не менялся вообще.
+// ====================================================================
+
+// Фаза 1: Serial/дисплей/мьютексы/железо/связи модулей.
+static void setupHardware() {
     Serial.begin(SERIAL_BAUD);
     delay(1000);
 
@@ -370,7 +376,17 @@ void setup() {
 
     gripper.setServoController(&servoCtrl);
     storage.begin();
+}
 
+void setup() {
+    setupHardware();      // Serial/дисплей/мьютексы/железо/связи модулей
+    setupConfig();        // EEPROM + FW-миграция + зоны + проверка home
+    setupHome();          // стартовая поза + sharedState + заезд в home + refresh
+    setupCalibAndTasks(); // калибровка IMU + задачи + Ready
+}
+
+// Фаза 2: EEPROM + FW-миграция + зоны + проверка сохранённого home.
+static void setupConfig() {
     // Загрузка конфигурации из EEPROM
     if (storage.isConfigValid()) {
         if (storage.loadConfig(config, homeAngles.angles)) {
@@ -465,7 +481,10 @@ void setup() {
             homeAngles.angles[i] = DEFAULT_HOME_ANGLES[i];
         }
     }
+}
 
+// Фаза 3: стартовая поза + sharedState + заезд в home + refresh PWM.
+static void setupHome() {
     // Стартовая поза после ребута: лучшего знания о железе нет
     // (сервы без обратной связи), поэтому считаем, что рука запаркована
     // дома (так уже считает дисплей). Нули здесь — худший вариант:
@@ -531,6 +550,10 @@ void setup() {
             Serial.println(safety.getLastError());
         }
     }
+}
+
+// Фаза 4: калибровка IMU + задачи + Ready.
+static void setupCalibAndTasks() {
     // Калибровка нуля гиро — только если IMU есть. Для bias нужна лишь
     // неподвижность (рука уже стоит в home), а не сама поза.
     // Рука должна стоять смирно!
