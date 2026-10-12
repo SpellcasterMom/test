@@ -105,6 +105,10 @@ void MotionInterpolator::execTrampoline(void *arg) {
     ((MotionInterpolator *)arg)->execLoop();
 }
 
+// Доля шагов на разгон/торможение (блендинг и ноги потока).
+// Объявлена здесь — выше обоих пользователей (batchProfFor, moveToPose).
+static const float CHAIN_RAMP_FRAC = 0.15f;
+
 int MotionInterpolator::streamDepth() const {
     if (!streamQ_) return 0;
     return (int)uxQueueMessagesWaiting(streamQ_);
@@ -892,11 +896,7 @@ void MotionInterpolator::outputStep(const JointAngles &q) {
     }
 }
 
-// Доля шагов на разгон/торможение в цепочке блендинга.
-static const float CHAIN_RAMP_FRAC = 0.15f;
-
-/**
- * Профиль e(t) для блендинга: трапеция с косинусными рампами.
+// Профиль e(t) для блендинга: трапеция с косинусными рампами.
  * rIn/rOut — доли отрезка на разгон/торможение (0 = сторона в цепочке,
  * без останова). Скорость C1-непрерывна на стыках: рампа 0→V косинусом,
  * круиз V=1/(1-rIn/2-rOut/2) (~1.08 при рампах 15% — единицы процентов
