@@ -49,7 +49,7 @@ class MotionInterpolator;  // только указатель, полный ти
 
 #define IMU_HZ        200
 #define IMU_PERIOD_MS (1000 / IMU_HZ)
-#define IMU_LOG_N     2048          // сэмплов в кольце (~10 с на 200 Гц: весь круг влезает; ~36 КБ статики)
+#define IMU_LOG_N     4096          // сэмплов в кольце (~20 с на 200 Гц: длинные потоки влезают; ~72 КБ статики)
 #define IMU_IDLE_GAP_MS 1000        // пауза «кончилось движение» для сброса кольца
 
 struct ImuSample {
