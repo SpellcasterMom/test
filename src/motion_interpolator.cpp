@@ -831,11 +831,10 @@ void MotionInterpolator::executeStep(const JointAngles &from, const JointAngles 
 // IK-доводка каждого шага от предыдущего (трекинг).
 // ============================================================================
 
-static const float CART_PI = 3.14159265f;
 static const float CART_JUMP_DEG = 45.0f;  // порог срыва трекинга за шаг
 
-static float cartDeg2Rad(float d) { return d * CART_PI / 180.0f; }
-static float cartRad2Deg(float r) { return r * 180.0f / CART_PI; }
+static float cartDeg2Rad(float d) { return d * RAD_PER_DEG; }
+static float cartRad2Deg(float r) { return r * DEG_PER_RAD; }
 static float cartClamp(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }

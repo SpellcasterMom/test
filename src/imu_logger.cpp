@@ -145,8 +145,8 @@ void ImuLogger::calibrateGyro(uint16_t n) {
 void ImuLogger::imuFuse(float gxDps, float gyDps,
                         float axMg, float ayMg, float azMg) {
     // Наклон по акселю (deg): roll вокруг X, pitch вокруг Y.
-    float rollAcc = atan2f(ayMg, azMg) * 57.2958f;
-    float pitchAcc = atan2f(-axMg, sqrtf(ayMg * ayMg + azMg * azMg)) * 57.2958f;
+    float rollAcc = atan2f(ayMg, azMg) * DEG_PER_RAD;
+    float pitchAcc = atan2f(-axMg, sqrtf(ayMg * ayMg + azMg * azMg)) * DEG_PER_RAD;
     const float dt = IMU_PERIOD_MS / 1000.0f;
     const float A = 0.99f;  // tau ~0.5 с: гиро ведёт, аксель правит дрейф
     if (!fuseInit_) {

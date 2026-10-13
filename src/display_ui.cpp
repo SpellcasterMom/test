@@ -144,11 +144,8 @@ static void drawFieldR(int xLabel, int xRight, int y,
 /**
  * toolEulerZYX() — ориентация инструмента (R06) в эйлеры ZYX, градусы.
  * Та же конвенция, что G-code A/B/C (R = Rz·Ry·Rx).
+ * Множитель DEG_PER_RAD — общий из types.h.
  */
-// Радианы в градусы одним множителем на всю функцию (константа времени
-// компиляции: atan2/asin отдают радианы, 180/π здесь не пересчитывается).
-static const float DEG_PER_RAD = 180.0f / 3.14159265f;
-
 static void toolEulerZYX(const float q[6], float &a, float &b, float &c) {
     Mat4 R = fkSolver.getRotationMatrix(q, 5);
     float sp = -R.m[2][0];
