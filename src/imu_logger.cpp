@@ -21,6 +21,7 @@
  */
 
 #include "imu_logger.h"
+#include "i2c_bus.h"
 #include <Arduino.h>
 #include <Wire.h>
 #include <math.h>
@@ -187,9 +188,7 @@ void ImuLogger::reinitChips() {
 void ImuLogger::recoverBus() {
     Wire.end();
     delay(5);
-    Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-    Wire.setClock(I2C_CLOCK_HZ);  // см. config.h: провода 5 см, голый транспорт
-    Wire.setTimeout(I2C_TIMEOUT_MS);
+    bringUpI2CBus();  // пины/частота из config.h (см. i2c_bus.h)
     reinitChips();
     busFails_ = 0;
     recovers_++;
