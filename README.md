@@ -287,14 +287,19 @@ M115            # T1: dPos ≤ 1 мм, dOri — единицы градусов
 
 ```
 src/
-  main.cpp                — FreeRTOS, обработчики команд, дисплей, setup/CALIB
+  main.cpp                — FreeRTOS, setup-фазники (тонкий ~615 строк; обработчики вынесены)
+  app.h                   — extern-хаб распила main.cpp
   config.h                — константы, DH, лимиты, версии FW/HW, парк/home
-  types.h                 — Vec3, Mat4, JointAngles, Pose, GCodeCommand
-  commands.h              — таблица команд (G0, G1, G28, M104, M108, M119...)
-  fk_solver.h/.cpp        — прямая кинематика (DH)
+  types.h                 — Vec3, Mat4, JointAngles, Pose, GCodeCommand + DEG_PER_RAD/RAD_PER_DEG
+  commands.h              — таблица команд (G0, G1, G28, M104, M108, M114/M115, M119, M450/STREAM…)
+  display_ui.h/.cpp       — дисплей ST7789 (статус, RPY, углы, safety, кружки PCA/GYR)
+  handlers_motion.h/.cpp  — G0/G1/G28/G90/G91, M104/M108 (декарт + поток)
+  handlers_system.h/.cpp  — M111–M119, M112, M400–M417, M450, ? (диагностика и конфиг)
+  kin_diag.h/.cpp         — DiagSol/DiagLastMove, разбор M115 (STREAM/CHUNKS/RESIDUAL)
+  fk_solver.h/.cpp        — прямая кинематика (DH, кэш cos/sin alpha)
   ik_solver.h/.cpp        — обратная кинематика (геометрия + DLS)
   servo_controller.h/.cpp — PCA9685, math→ШИМ, инверсии, i2cMutex
-  motion_interpolator.h/.cpp — интерполяция (LIN/SEQ/AUTO/CART) + Q1-блендинг стыков (chainEase), метки M115
+  motion_interpolator.h/.cpp — интерполяция (LIN/SEQ/AUTO/CART) + Q1-блендинг (chainEase) + поток M450 (кольцо/backpressure)
   safety_checker.h/.cpp   — workspace, зоны, zMin, links (skipLink 0)
   backlash_compensator.h/.cpp — компенсация люфта
   gripper_controller.h/.cpp — захват (P7, проценты)
@@ -302,19 +307,21 @@ src/
   eeprom_storage.h/.cpp   — blob конфигурации + FW-миграция
   detour_planner.h/.cpp   — объезд (via + RRT, детерминированный)
   jog_pendant.h/.cpp      — ручной пульт (штурвал/NEXT/E-STOP)
-  imu_logger.h/.cpp       — GY-80: опрос 200 Гц, фьюжн, кольцо 1024 (~5 с), M119
+  imu_logger.h/.cpp       — GY-80: опрос 200 Гц, фьюжн, кольцо 2048 (~10 с), метки f, live S=2, M119
 tools/ — раннеры Serial + TCP-клиент + двойник (подробно: tools/README.md)
   jogger.py (клавиатурный джог P1–P7, 0=все в 0, ~=M105),
   tcp_console.py (G-code по TCP-мосту),
-  demo_circle.py (tilt/plusx пресеты + лог M115),
-  demo_endpoint.py, demo.py,
+  demo_circle.py (tilt/plusx; поток M450, boot-sync, live-захват #IMU, финал G28 H1),
+  demo_endpoint.py (12 шагов + M115, boot-sync, финал G28 H1), demo.py,
   make_deck.py (вне master, незакоммичен)
   twin/ — двойник FK/IK 1:1 (solve.py/fk.py/ik.py/detour.py/verify_low.py/fit3.py… — полный список в tools/README.md)
 docs/ — robot1.jpg (чертёж), MATH.md + MATH.docx (записка),
-  FLOW.md + FLOW.vdx (схемы для Visio), KINEMATICS.md (референс)
+  FLOW.md + FLOW.vdx (схемы для Visio), KINEMATICS.md (референс),
+  INFRA.md (карта инфраструктуры: робот/helper/сеть/репо/песочница)
   @eaDir/ — служебный мусор Synology, не коммитить
 cad/ — STEP-каталог Models/ (коннекторы, приводы big/small + роторы,
   base + base_rotor) + reach.stl/dex_*.stl/base_column.stl (конверты), cad/README.md
+prompts/ — presentation_gamma.md (промт презентации CLAW + бренд СевГУ)
 platformio.ini — сборка/заливка (monitor_speed синхронна с SERIAL_BAUD)
 TODO.md — техдолг (самоколлизии, длинные потоки…)
 agent.md — рабочие соглашения (ветки, шапки, I2C-правила, стиль)
