@@ -14,7 +14,7 @@
 /**
  * Инициализация сервоконтроллера.
  *
- * Шаг 1: Wire.begin(21, 22) + 400 кГц, проба адреса 0x40
+ * Шаг 1: Wire.begin(I2C_*) + I2C_CLOCK_HZ (см. config.h), проба адреса 0x40
  *   (стандартный; перемычками A0–A5 может быть другим).
  *
  * Шаг 2: setupSingleDevice(Wire, 0x40) + setToServoFrequency() (50 Гц).
@@ -24,10 +24,10 @@
  * Шаг 3: Загрузка конфигураций из DEFAULT_CONFIG для каждого серво.
  */
 void ServoController::init() {
-    // I2C явно: пины ESP32 + 400 кГц (как в проверенном стенде).
-    Wire.begin(21, 22);
-    Wire.setClock(400000);  // вернули с 100 кГц: провода 5 см, голый транспорт
-    Wire.setTimeout(20);  // все транзакции bounded: зависшая шина не вешает задачу
+    // I2C явно: пины/частота из config.h (как в проверенном стенде).
+    Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+    Wire.setClock(I2C_CLOCK_HZ);
+    Wire.setTimeout(I2C_TIMEOUT_MS);
 
     // Проверяем, отвечает ли PCA9685 по I2C
     Wire.beginTransmission(0x40);

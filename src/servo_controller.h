@@ -46,7 +46,7 @@ class ServoController {
 public:
     /**
      * Инициализация драйвера PCA9685.
-     * Wire.begin(21, 22) + 400 кГц, проба адреса 0x40,
+     * Wire.begin(I2C_*) + I2C_CLOCK_HZ (см. config.h), проба адреса 0x40,
      * setupSingleDevice + частота сервоприводов 50 Гц.
      * Без железа — debug-режим (isPcaAvailable() == false).
      */
