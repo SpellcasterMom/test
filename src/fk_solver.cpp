@@ -112,8 +112,8 @@ void FKSolver::setFingerLength(float len) {
  */
 void FKSolver::refreshTrigCache() {
     for (int i = 0; i < 6; i++) {
-        offRad[i] = dh[i][3] * DEG_TO_RAD;
-        float al = dh[i][1] * DEG_TO_RAD;
+        offRad[i] = dh[i][3] * RAD_PER_DEG;
+        float al = dh[i][1] * RAD_PER_DEG;
         calpha[i] = cos(al);
         salpha[i] = sin(al);
     }
@@ -155,7 +155,7 @@ Mat4 FKSolver::computeFK(const float q[6], int upToJoint) {
 
     for (int i = 0; i <= upToJoint && i < 6; i++) {
         // Суммируем угол сочленения и начальный сдвиг (сдвиг уже в радианах из кэша)
-        float theta = q[i] * DEG_TO_RAD + offRad[i];
+        float theta = q[i] * RAD_PER_DEG + offRad[i];
         // DH-матрица звена i (cos/sin(alpha) из кэша)
         Mat4 Ti = dhFast(dh[i][0], i, dh[i][2], theta);
         // Накопление: текущая T умножается на Ti
@@ -174,7 +174,7 @@ void FKSolver::computeChain(const float q[6], Vec3 joints[7], Mat4 &T06) {
     Mat4 T = Mat4::identity();
     joints[0] = {0, 0, 0};
     for (int i = 0; i < 6; i++) {
-        float theta = q[i] * DEG_TO_RAD + offRad[i];
+        float theta = q[i] * RAD_PER_DEG + offRad[i];
         Mat4 Ti = dhFast(dh[i][0], i, dh[i][2], theta);
         T = T * Ti;
         joints[i + 1] = T.getPosition();

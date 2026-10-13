@@ -144,20 +144,21 @@ static void drawFieldR(int xLabel, int xRight, int y,
 /**
  * toolEulerZYX() — ориентация инструмента (R06) в эйлеры ZYX, градусы.
  * Та же конвенция, что G-code A/B/C (R = Rz·Ry·Rx).
+ * Множитель DEG_PER_RAD — общий из types.h.
  */
 static void toolEulerZYX(const float q[6], float &a, float &b, float &c) {
     Mat4 R = fkSolver.getRotationMatrix(q, 5);
     float sp = -R.m[2][0];
     if (sp > 0.9999f) {
         b = 90.0f; a = 0.0f;
-        c = atan2(-R.m[0][1], R.m[0][2]) * 180.0f / 3.14159265f;
+        c = atan2(-R.m[0][1], R.m[0][2]) * DEG_PER_RAD;
     } else if (sp < -0.9999f) {
         b = -90.0f; a = 0.0f;
-        c = atan2(-R.m[0][1], -R.m[0][2]) * 180.0f / 3.14159265f;
+        c = atan2(-R.m[0][1], -R.m[0][2]) * DEG_PER_RAD;
     } else {
-        b = asin(sp) * 180.0f / 3.14159265f;
-        a = atan2(R.m[2][1], R.m[2][2]) * 180.0f / 3.14159265f;
-        c = atan2(R.m[1][0], R.m[0][0]) * 180.0f / 3.14159265f;
+        b = asin(sp) * DEG_PER_RAD;
+        a = atan2(R.m[2][1], R.m[2][2]) * DEG_PER_RAD;
+        c = atan2(R.m[1][0], R.m[0][0]) * DEG_PER_RAD;
     }
 }
 

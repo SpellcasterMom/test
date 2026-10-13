@@ -20,9 +20,9 @@ DiagLastMove diagLast;
 // Направление инструмента (ось Z) из углов Эйлера ZYX — та же формула,
 // что IKSolver::eulerToMatrix, третий столбец.
 static Vec3 diagToolDir(const Vec3 &o) {
-    float cr = cos(o.x * DEG_TO_RAD), sr = sin(o.x * DEG_TO_RAD);
-    float cp = cos(o.y * DEG_TO_RAD), sp = sin(o.y * DEG_TO_RAD);
-    float cy = cos(o.z * DEG_TO_RAD), sy = sin(o.z * DEG_TO_RAD);
+    float cr = cos(o.x * RAD_PER_DEG), sr = sin(o.x * RAD_PER_DEG);
+    float cp = cos(o.y * RAD_PER_DEG), sp = sin(o.y * RAD_PER_DEG);
+    float cy = cos(o.z * RAD_PER_DEG), sy = sin(o.z * RAD_PER_DEG);
     Vec3 d;
     d.x = cy*sp*cr + sy*sr;
     d.y = sy*sp*cr - cy*sr;
@@ -35,7 +35,7 @@ static float diagOriErr(const Vec3 &a, const Vec3 &b) {
     float dot = a.x*b.x + a.y*b.y + a.z*b.z;
     if (dot > 1.0f) dot = 1.0f;
     if (dot < -1.0f) dot = -1.0f;
-    return acos(dot) * RAD_TO_DEG;
+    return acos(dot) * DEG_PER_RAD;
 }
 
 // Посчитать FK + ошибки + safety для кандидата и положить в DiagSol.
