@@ -3,10 +3,10 @@
 Project     : 6DOF arm (CLAW) — MCP protocol tests
 Author      : Vladimir V. Laykov aka Yago
 Alma Mater  : Sevastopol State University
-Group       : UTS/b-23-1-o
+Group       : УТС/б-23-1-о
 Mentor      : Lipko I.Y.
 Date        : 2026-10-11
-Last modify : 2026-10-11
+Last modify : 2026-10-13
 
 Офлайн-тесты: парсинг ответов и построители команд. Железо не нужно.
 Запуск из корня репо: python3 -m pytest mcp/tests/ -q
@@ -94,3 +94,58 @@ def test_g28_m108_m119_m115():
     assert commands.build_m119(True, 10) == "M119 S=1 D=10"
     assert commands.build_m115() == "M115"
     assert commands.build_m115(True) == "M115 S=1"
+
+
+def test_m450():
+    assert commands.build_m450("open") == "M450 S1"
+    assert commands.build_m450("drain") == "M450 S0"
+    assert commands.build_m450("abort") == "M450 S2"
+    with pytest.raises(ValidationError):
+        commands.build_m450("explode")
+
+
+def test_check_g1():
+    assert commands.check_g1("G1 X=1 F100") == "G1 X=1 F100"
+    assert commands.check_g1("g1 x=1 y=2 f300") == "g1 x=1 y=2 f300"
+    with pytest.raises(ValidationError):
+        commands.check_g1("G0 X=1 F100")  # не G1
+    with pytest.raises(ValidationError):
+        commands.check_g1("G1 X=1")  # без F
+    with pytest.raises(ValidationError):
+        commands.check_g1("")
+    with pytest.raises(ValidationError):
+        commands.check_g1(None)
+
+
+def test_move_stream_sequence(monkeypatch):
+    import server
+    calls = []
+
+    def fake_run(cmd, timeout=None):
+        calls.append(cmd)
+        if cmd == "M115":
+            return "OK QUIET\nRESIDUAL: dist=0.5mm dOri=0.3deg"
+        return "OK"
+
+    monkeypatch.setattr(server, "run", fake_run)
+    fn = getattr(server.move_stream, "fn", server.move_stream)
+    out = fn(["G1 X=1 F100", "G1 X=2 F100"], confirm=True)
+    assert calls == ["M450 S1", "G1 X=1 F100", "G1 X=2 F100",
+                     "M450 S0", "M115"]
+    assert "RESIDUAL" in out
+    # без confirm — отказ, в порт ничего не ушло
+    del calls[:]
+    out = fn(["G1 X=1 F100"], confirm=False)
+    assert out.startswith("Отказ") and not calls
+    # битая точка — отказ до S1
+    out = fn(["G0 X=1 F100"], confirm=True)
+    assert out.startswith("Отказ") and not calls
+    # обрыв посреди — S2 и возврат FAIL
+    def fake_fail(cmd, timeout=None):
+        calls.append(cmd)
+        return "FAIL TIMEOUT" if cmd.startswith("G1") else "OK"
+    monkeypatch.setattr(server, "run", fake_fail)
+    del calls[:]
+    out = fn(["G1 X=1 F100"], confirm=True)
+    assert calls == ["M450 S1", "G1 X=1 F100", "M450 S2"]
+    assert out.startswith("FAIL")

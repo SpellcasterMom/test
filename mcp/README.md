@@ -1,8 +1,8 @@
 # mcp — MCP-сервер робота CLAW
 
-11 тулов: чтение (`status_angles`, `fk`, `diag`, `imu`, `help_text`)
-+ движение (`move_joints`, `move_tcp`, `move_linear`, `go_home`,
-`gripper`, `e_stop`). Протокол ответов 1:1 с `tools/tcp_console.py`.
+12 тулов: чтение (`status_angles`, `fk`, `diag`, `imu`, `help_text`)
++ движение (`move_joints`, `move_tcp`, `move_linear`, `move_stream`,
+`go_home`, `gripper`, `e_stop`). Протокол ответов 1:1 с `tools/tcp_console.py`.
 
 ## Где запускать
 
@@ -34,6 +34,10 @@ Env: `ROBOT_TRANSPORT=serial|tcp`, `ROBOT_SERIAL_PORT`, `ROBOT_BAUD`
 - Хозяин порта один: перед стартом закрой `pio monitor`, `socat`
   на том же порту, `tools/*.py`.
 - Движение только с `confirm=true`; `G1` без `F` — отказ.
+- Пачки (`move_stream`, M450): точки — строки `G1 … F…` (лимит 500);
+  сервер шлёт `S1 → точки → S0`, при обрыве — `S2`, в конце — сводка
+  `M115`. Прошивка без стриминга ответит `ERROR` на `S1` — тогда
+  по точкам обычными `move_linear`.
 - `M111`/`M500`/`M502` не экспонируются (home/EEPROM — только человек).
 - `/dev/ttyUSB0` должен быть `crw-`, не обычным файлом (см. грабли
   в истории: `rm` + перетык платы).

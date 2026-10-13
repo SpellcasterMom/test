@@ -3,10 +3,10 @@
 Project     : 6DOF arm (CLAW) — MCP command builders
 Author      : Vladimir V. Laykov aka Yago
 Alma Mater  : Sevastopol State University
-Group       : UTS/b-23-1-o
+Group       : УТС/б-23-1-о
 Mentor      : Lipko I.Y.
 Date        : 2026-10-11
-Last modify : 2026-10-11
+Last modify : 2026-10-13
 
 Чистые построители G-code для MCP-тулов (без железа и без MCP-зависимостей,
 покрыты офлайн-тестами). Лимиты — MATH-лимиты из README: P1–P3 ±135°,
@@ -112,6 +112,27 @@ def build_m119(dump=False, decimate=0):
     if decimate and decimate > 1:
         return "M119 S=1 D=%d" % int(decimate)
     return "M119 S=1"
+
+
+def build_m450(action):
+    """M450: open=S1 (открыть поток), drain=S0 (исполнить), abort=S2."""
+    cmds = {"open": "M450 S1", "drain": "M450 S0", "abort": "M450 S2"}
+    if action not in cmds:
+        raise ValidationError("M450: действие open/drain/abort")
+    return cmds[action]
+
+
+def check_g1(cmd):
+    """Сырая строка точки потока: 'G1 ...' + обязательная F."""
+    if not isinstance(cmd, str) or not cmd.strip():
+        raise ValidationError("точка потока — непустая строка 'G1 ...'")
+    parts = cmd.strip().split()
+    if parts[0].upper() != "G1":
+        raise ValidationError(
+            "точка потока должна начинаться с G1: %r" % cmd)
+    if not any(p.upper().startswith("F") for p in parts[1:]):
+        raise ValidationError("G1 без F — отказ: %r" % cmd)
+    return cmd.strip()
 
 
 def build_m115(full=False):

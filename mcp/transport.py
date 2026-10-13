@@ -3,10 +3,10 @@
 Project     : 6DOF arm (CLAW) — MCP transport
 Author      : Vladimir V. Laykov aka Yago
 Alma Mater  : Sevastopol State University
-Group       : UTS/b-23-1-o
+Group       : УТС/б-23-1-о
 Mentor      : Lipko I.Y.
 Date        : 2026-10-11
-Last modify : 2026-10-11
+Last modify : 2026-10-13
 
 Транспорт MCP-сервера к контроллеру: Serial (pyserial) или TCP-мост
 (socat на машине с железом). Семантика ответов 1:1 с tools/demo.py и
