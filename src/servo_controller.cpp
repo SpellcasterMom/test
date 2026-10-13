@@ -10,6 +10,7 @@
  */
 
 #include "servo_controller.h"
+#include "i2c_bus.h"
 
 /**
  * Инициализация сервоконтроллера.
@@ -24,10 +25,8 @@
  * Шаг 3: Загрузка конфигураций из DEFAULT_CONFIG для каждого серво.
  */
 void ServoController::init() {
-    // I2C явно: пины/частота из config.h (как в проверенном стенде).
-    Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-    Wire.setClock(I2C_CLOCK_HZ);
-    Wire.setTimeout(I2C_TIMEOUT_MS);
+    // I2C явно: подъём из i2c_bus.h (пины/частота из config.h).
+    bringUpI2CBus();
 
     // Проверяем, отвечает ли PCA9685 по I2C
     Wire.beginTransmission(0x40);
