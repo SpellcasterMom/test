@@ -18,10 +18,11 @@
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
 #include "types.h"
+#include "config.h"
 
 // ===== Дисплей ST7789 (LovyanGFX, DMA) =====
-// Экран 1.54" 240×240. Пины заданы здесь (VSPI-родные: MOSI=23, SCLK=18).
-// Ручки под конкретную партию стекла (если картинка сдвинута/инвертирована):
+// Экран 1.54" 240×240. Пины — из config.h (блок «Пины и шины»);
+// здесь только ручки под конкретную партию стекла:
 //   offset_rotation / invert / rgb_order ниже.
 class LGFX : public lgfx::LGFX_Device {
     lgfx::Panel_ST7789 _panel_instance;
@@ -37,17 +38,17 @@ public:
             cfg.spi_mode   = 0;
             cfg.freq_write = 40000000;
             cfg.freq_read  = 16000000;
-            cfg.pin_sclk   = 18;
-            cfg.pin_mosi   = 23;
+            cfg.pin_sclk   = DISP_SPI_SCLK_PIN;
+            cfg.pin_mosi   = DISP_SPI_MOSI_PIN;
             cfg.pin_miso   = -1;
-            cfg.pin_dc     = 2;
+            cfg.pin_dc     = DISP_PIN_DC;
             _bus_instance.config(cfg);
             _panel_instance.setBus(&_bus_instance);
         }
         {
             auto cfg = _panel_instance.config();
-            cfg.pin_cs         = 5;
-            cfg.pin_rst        = 4;
+            cfg.pin_cs         = DISP_PIN_CS;
+            cfg.pin_rst        = DISP_PIN_RST;
             cfg.panel_width    = 240;
             cfg.panel_height   = 240;
             cfg.offset_rotation = 0;

@@ -187,9 +187,9 @@ void ImuLogger::reinitChips() {
 void ImuLogger::recoverBus() {
     Wire.end();
     delay(5);
-    Wire.begin(21, 22);
-    Wire.setClock(400000);  // см. servo init: провода 5 см, голый транспорт
-    Wire.setTimeout(20);
+    Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+    Wire.setClock(I2C_CLOCK_HZ);  // см. config.h: провода 5 см, голый транспорт
+    Wire.setTimeout(I2C_TIMEOUT_MS);
     reinitChips();
     busFails_ = 0;
     recovers_++;
