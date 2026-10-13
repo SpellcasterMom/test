@@ -47,6 +47,8 @@ void handleM426(GCodeCommand &cmd);
 
 void handleM430(GCodeCommand &cmd);
 
+void handleM450(GCodeCommand &cmd);
+
 void handleM500(GCodeCommand &cmd);
 void handleM501(GCodeCommand &cmd);
 void handleM502(GCodeCommand &cmd);
@@ -207,10 +209,11 @@ const CommandDef COMMANDS[] = {
     },
     {
         .name = "M119",
-        .description = "IMU telemetry: M119 [S=1 dump] [D=4 decimate]",
+        .description = "IMU telemetry: M119 [S=1 dump] [S=2 live] [D=4 decimate]",
         // Параметры M119:
         //   без параметров — живые значения (наклон, counts, bias, пики);
         //   S=1 — дамп кольца последнего движения (#IMU строки + OK);
+        //   S=2 — живой поток #IMU (тоггл; только при движении; M112 гасит);
         //   D=N — печатать каждый N-й сэмпл (быстрее).
         //       Пример: M119 S=1 D=4 — дамп с децимацией 4
         .params = {
@@ -439,6 +442,25 @@ const CommandDef COMMANDS[] = {
         },
         .paramCount = 1,
         .handler = handleM430,
+    },
+    {
+        .name = "M450",
+        .description = "Waypoint stream: M450 S=1 open, G1s, M450 S=0 drain, M450 S=2 abort",
+        // Поток точек (стриминг): планировщик считает IK заранее, исполнитель
+        // дренирует кольцо строгим кадансом — ШИМ не останавливается на счёт.
+        //   S=1 — открыть (следующие G1 копятся; OK = принято+провалидировано,
+        //         придерживается пока нет места — backpressure, не ERROR);
+        //   S=0 — барьер: докачать, исполнить всё без остановок, встать;
+        //   S=2 — сбросить без движения (идемпотентно).
+        // Правила: кольцо 180 точек (~3 авто-чанка по 60); голод —
+        // hold-and-resume со счётчиком; отказ точки = ERROR + сброс потока;
+        // G0/M104/G28/M108 и jog при открытом/исполняемом потоке запрещены;
+        // M112 — стоп + сброс всегда. Без потока G1 едет как раньше.
+        .params = {
+            {'S', PARAM_INT, 0, 0},
+        },
+        .paramCount = 1,
+        .handler = handleM450,
     },
 
     // ================================================================

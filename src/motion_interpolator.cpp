@@ -21,7 +21,11 @@ MotionInterpolator::MotionInterpolator()
     : servoCtrl(nullptr), backlash(nullptr), safety(nullptr),
       ikSolver(nullptr), fkSolver(nullptr),
       strategy(INTERP_AUTO), stepCallback(nullptr), moving(false),
-      chainActive_(false) {
+      chainActive_(false), streamQ_(nullptr), execTask_(nullptr),
+      batchOpen_(false), streamClosing_(false), streamAbortReq_(false),
+      streamState_(ST_IDLE), planSeq_(0), execSeq_(0), starved_(0),
+      holdsMs_(0), maxStepMs_(0), depthMax_(0), dropSeq_(0),
+      planTailValid_(false), chunkN_(0), execOk_(false) {
     memset(&currentAngles, 0, sizeof(currentAngles));
     setMark("NONE", "-");
 }
@@ -72,11 +76,329 @@ bool MotionInterpolator::isMoving() const {
  * @brief Немедленная остановка движения.
  * Устанавливает флаг moving=false. Цикл интерполяции проверяет этот флаг
  * на каждой итерации и прерывается при его сбросе.
- * Рвёт и цепочку блендинга (M112/E-STOP — следующий G1 только с останова).
+ * Рвёт и цепочку блендинга (M112/E-STOP — следующий G1 только с останова),
+ * и открытый пакет M450 (накопленное сбрасывается).
  */
 void MotionInterpolator::stop() {
     moving = false;
     chainActive_ = false;
+    batchOpen_ = false;
+    streamAbortReq_ = true;  // очередь сбросит сам исполнитель (его контекст)
+}
+
+// ============================================================================
+// Поток M450: планировщик (core0Task) кладёт, исполнитель (Core1) дренирует.
+// Backpressure — отложенным OK (см. batchAdd). Голод — hold-and-resume.
+// Кросс-ядерно общее только: очередь (FreeRTOS, потокобезопасна) и
+// volatile-флаги/счётчики ниже. String и чужие члены через границу не ходят:
+// отказ safety в исполнителе пишется только номером ноги (без getLastError).
+// ============================================================================
+
+void MotionInterpolator::startExecTask() {
+    if (execTask_) return;
+    streamQ_ = xQueueCreate(STREAM_DEPTH, sizeof(StreamWp));
+    xTaskCreatePinnedToCore(execTrampoline, "stream_exec", 4096, this, 2,
+                            &execTask_, 1);
+}
+
+void MotionInterpolator::execTrampoline(void *arg) {
+    ((MotionInterpolator *)arg)->execLoop();
+}
+
+// Доля шагов на разгон/торможение (блендинг и ноги потока).
+// Объявлена здесь — выше обоих пользователей (batchProfFor, moveToPose).
+static const float CHAIN_RAMP_FRAC = 0.15f;
+
+int MotionInterpolator::streamDepth() const {
+    if (!streamQ_) return 0;
+    return (int)uxQueueMessagesWaiting(streamQ_);
+}
+
+bool MotionInterpolator::batchBegin() {
+    if (batchOpen_ || streamBusy()) return false;
+    // Исполнитель гарантированно в IDLE (иначе streamBusy).
+    planSeq_ = 0;
+    execSeq_ = 0;
+    chunkN_ = 0;
+    planTailValid_ = false;
+    dropSeq_ = 0;
+    starved_ = 0;
+    holdsMs_ = 0;
+    maxStepMs_ = 0;
+    depthMax_ = 0;
+    streamClosing_ = false;
+    streamAbortReq_ = false;
+    execOk_ = false;
+    batchOpen_ = true;
+    streamState_ = ST_FILLING;
+    chainActive_ = false;  // пакет и Q-цепочка — разные режимы
+    return true;
+}
+
+bool MotionInterpolator::batchAdd(const JointAngles &q, float feedrate,
+                                  float dPos, float dOri) {
+    // Вызывается только при открытом приёме (проверяет вызывающий).
+    // Backpressure отложенным OK: кольцо полное → ждём слота (снифф M112,
+    // флаг стопа, колпак 60с), OK хосту уходит только по факту записи.
+    if (!batchOpen_ || !streamQ_) return false;
+    const JointAngles &from = planTailValid_ ? planTail_ : currentAngles;
+    StreamWp wp;
+    wp.q = q;
+    wp.segMs = legMs(from, q, feedrate);
+    wp.dPos = dPos;
+    wp.dOri = dOri;
+    wp.seq = planSeq_;
+    uint32_t t0 = millis();
+    while (xQueueSend(streamQ_, &wp, pdMS_TO_TICKS(100)) != pdTRUE) {
+        if (streamAbortReq_ || !batchOpen_) return false;
+        if (Serial.available()) {
+            String line = "";
+            while (Serial.available()) {
+                char ch = Serial.read();
+                if (ch == '\n' || ch == '\r') break;
+                line += ch;
+            }
+            line.trim();
+            line.toUpperCase();
+            if (line.startsWith("M112")) {
+                stop();
+                return false;
+            }
+        }
+        if (millis() - t0 > 60000) return false;  // колпак: буфер встал
+    }
+    // Точка в кольце: учёт чанка + хвост continuity.
+    if (planSeq_ % STREAM_CHUNK == 0) {
+        // новый чанк (включая самый первый, seq=0)
+        ChunkRow &nw = chunks_[chunkN_ % CHUNK_ROWS];
+        nw.startSeq = planSeq_;
+        nw.n = 0;
+        nw.worstPos = 0.0f;
+        nw.worstOri = 0.0f;
+        chunkN_++;
+    }
+    ChunkRow &cr = chunks_[(uint8_t)((chunkN_ - 1) % CHUNK_ROWS)];
+    cr.n++;
+    if (dPos > cr.worstPos) cr.worstPos = dPos;
+    if (dOri > cr.worstOri) cr.worstOri = dOri;
+    planTail_ = q;
+    planTailValid_ = true;
+    planSeq_++;
+    int d = streamDepth();
+    if (d > depthMax_) depthMax_ = d;
+    return true;
+}
+
+// Профиль ноги пакета: те же рампы, что цепочка Q-блендинга.
+// middle-ноги (обе стороны в пакете) — чистый круиз e=t.
+struct BatchProf {
+    bool  trap;  // false = legacy easeInOut (крошечная нога)
+    float rIn, rOut, V;
+};
+
+// Определения ниже (после outputStep); здесь — только для batchExecute.
+static float chainEase(float t, float rIn, float rOut, float V);
+static BatchProf batchProfFor(bool rampIn, bool rampOut, int steps) {
+    BatchProf p{false, 0.0f, 0.0f, 1.0f};
+    if (!rampIn && !rampOut) {
+        p.trap = true;  // круиз: chainEase с нулевыми рампами = e(t)=t
+        return p;
+    }
+    if (steps < 6) return p;  // кроха — legacy стоп-профиль
+    int rSteps = (int)(steps * CHAIN_RAMP_FRAC + 0.5f);
+    if (rSteps < 2) rSteps = 2;
+    if (2 * rSteps >= steps) return p;  // вырожденный — legacy
+    p.trap = true;
+    p.rIn = rampIn ? (float)rSteps / (float)steps : 0.0f;
+    p.rOut = rampOut ? (float)rSteps / (float)steps : 0.0f;
+    p.V = 1.0f / (1.0f - p.rIn * 0.5f - p.rOut * 0.5f);
+    return p;
+}
+
+// ============================================================================
+// Поток точек M450: планирование отдельно (core0Task), исполнение отдельно
+// (задача исполнителя, Core1). Исполнитель — детерминированный replay
+// joint-поз (IK уже посчитан, повторная доводка не нужна и вредна для
+// каданса). Поэтому runtime-гейта расхождения тут нет осознанно: при тех
+// же q FK детерминирован, заново мерить нечего; ворота 10/15 проверяются
+// на планировании каждой точки.
+// ============================================================================
+
+void MotionInterpolator::batchAbort() {
+    // Вызывается из core0Task (хендлеры): очередь трогать можно, но сбросом
+    // займётся исполнитель (у него контекст + каданс); здесь только флаги.
+    batchOpen_ = false;
+    streamAbortReq_ = true;
+    dropSeq_ = planSeq_;  // всё непотреблённое — сброшено (для статуса чанков)
+}
+
+void MotionInterpolator::execLoop() {
+    // Задача исполнителя (Core1): строгий каданс 20мс, считать нечего
+    // (всё спланировано), только lerp + ШИМ + safety + M112-через-флаг.
+    // Serial здесь НЕ трогаем (он у core0Task): стоп приходит флагом.
+    JointAngles qPrev;
+    bool havePrev = false;
+    bool rampNext = true;  // первая нога забега — с разгоном
+    TickType_t slot = xTaskGetTickCount();
+    for (;;) {
+        // Отложенный сброс из stop()/ISR: только здесь (task-контекст).
+        if (streamAbortReq_) {
+            streamAbortReq_ = false;
+            if (streamQ_) xQueueReset(streamQ_);
+            streamState_ = ST_IDLE;
+            streamClosing_ = false;
+            batchOpen_ = false;
+            havePrev = false;
+            rampNext = true;
+            moving = false;
+            setMark("STREAM", "aborted");
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        StreamWp wp;
+        if (!streamQ_ ||
+            xQueueReceive(streamQ_, &wp, pdMS_TO_TICKS(50)) != pdTRUE) {
+            if (streamClosing_) {
+                // Докачали: встаём сразу (рампа уже была на последней ноге —
+                // см. lastLeg ниже; сюда попадаем только если S0 пришло
+                // посреди неё — один квант, сервы сгладят).
+                streamClosing_ = false;
+                streamState_ = ST_IDLE;
+                havePrev = false;
+                rampNext = true;
+                moving = false;
+                execOk_ = true;
+                setMark("STREAM", "drained");
+                continue;
+            }
+            if (havePrev) {
+                // Голодание посреди потока: стоим (PCA держит последнюю
+                // позу сама), считаем, ждём докачки. Разгон — по resume.
+                if (streamState_ != ST_HOLDING) {
+                    streamState_ = ST_HOLDING;
+                    starved_++;
+                    setMark("STREAM", "starved-hold");
+                }
+                holdsMs_ += 50;
+                rampNext = true;
+            } else if (batchOpen_) {
+                streamState_ = ST_FILLING;
+            } else {
+                streamState_ = ST_IDLE;
+            }
+            continue;
+        }
+        // Точка есть: ведём учёт потребления для статуса чанков.
+        execSeq_ = wp.seq + 1;
+        if (!havePrev) {
+            qPrev = currentAngles;  // старт забега — с текущей позы
+            havePrev = true;
+        }
+        streamState_ = ST_RUNNING;
+        if (!moving) moving = true;
+        JointAngles legFrom = qPrev;  // C0: нога стартует ровно там, где встала прошлая
+        int steps = (int)(wp.segMs / STEP_INTERVAL_MS);
+        if (steps < 1) steps = 1;
+        // Последняя нога (закрылись и кольцо пусто) — тормозим на ней же.
+        // Иначе S0, пришедший посреди неё, давал бы квант-стоп в конце.
+        bool lastLeg = streamClosing_ && streamQ_ &&
+                       (uxQueueMessagesWaiting(streamQ_) == 0);
+        BatchProf pr = batchProfFor(rampNext, lastLeg, steps);
+        rampNext = false;  // разгон — только первой ноге забега
+        bool legOk = true;
+        for (int step = 0; step <= steps; step++) {
+            if (!moving || streamAbortReq_) { legOk = false; break; }
+            uint32_t st0 = millis();
+            float t = (float)step / steps;
+            float e = pr.trap ? chainEase(t, pr.rIn, pr.rOut, pr.V)
+                              : easeInOut(t);
+            JointAngles qq;
+            for (int k = 0; k < 7; k++) {
+                qq.angles[k] = legFrom.angles[k] +
+                    (wp.q.angles[k] - legFrom.angles[k]) * e;
+            }
+            // Safety каждой точки (дешёвый; String-причину не трогаем —
+            // она у другого ядра: только номер ноги).
+            if (safety && safety->isEnabled() && !safety->checkAllLinks(qq.angles)) {
+                char note[64];
+                snprintf(note, sizeof(note), "stream leg seq=%lu refused",
+                         (unsigned long)wp.seq);
+                setMark("STREAM", note);
+                moving = false;
+                currentAngles = qPrev;
+                legOk = false;
+                break;
+            }
+            outputStep(qq);
+            qPrev = qq;
+            uint32_t spent = millis() - st0;
+            if (spent > maxStepMs_) maxStepMs_ = spent;
+            vTaskDelayUntil(&slot, pdMS_TO_TICKS((uint32_t)STEP_INTERVAL_MS));
+        }
+        if (!legOk) {
+            // отказ ноги: стоим где встали, поток рвём (хост увидит по S0/марке)
+            streamAbortReq_ = true;  // дочистит верх цикла
+            continue;
+        }
+        currentAngles = qPrev;  // зеркало для S0-синка (читается только в IDLE)
+    }
+}
+
+float MotionInterpolator::legMs(const JointAngles &from, const JointAngles &to,
+                                float feedrate) {
+    // Та же формула времени, что оценка в moveToPose: по joint-дельтам
+    // и потолкам maxAngularSpeed (включая гриппер, канал 6).
+    float maxTime = 0;
+    for (int i = 0; i < 7; i++) {
+        float dd = fabs(to.angles[i] - from.angles[i]);
+        if (servoCtrl && dd > 0) {
+            float maxSpeed = servoCtrl->getConfig(i).maxAngularSpeed;
+            if (maxSpeed > 0) {
+                float tm = dd / maxSpeed;
+                if (tm > maxTime) maxTime = tm;
+            }
+        }
+    }
+    float pct = 100.0f;
+    if (feedrate > 0.0f && feedrate < 100.0f) pct = feedrate;
+    if (pct != 100.0f) maxTime = maxTime * (100.0f / pct);
+    return maxTime * 1000.0f;
+}
+
+bool MotionInterpolator::batchExecute() {
+    // M450 S0: барьер конца потока. Закрываем приём, ждём полного дрена
+    // исполнителем (он уже мог начать дрен при глубине >= KICK).
+    // Блокирует core0Task до IDLE (со сниффом M112); каданс всё это время
+    // держит задача исполнителя — пауз нет.
+    if (!batchOpen_) return false;
+    batchOpen_ = false;
+    streamClosing_ = true;
+    uint32_t t0 = millis();
+    for (;;) {
+        if (streamState_ == ST_IDLE) break;
+        if (Serial.available()) {
+            String line = "";
+            while (Serial.available()) {
+                char ch = Serial.read();
+                if (ch == '\n' || ch == '\r') break;
+                line += ch;
+            }
+            line.trim();
+            line.toUpperCase();
+            if (line.startsWith("M112")) {
+                stop();
+                setMark("STREAM", "stopped-M112");
+                break;
+            }
+        }
+        if (millis() - t0 > 600000UL) {  // колпак 10 мин: дальше только M112
+            stop();
+            setMark("STREAM", "drain timeout");
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    return execOk_;
 }
 
 /**
@@ -92,6 +414,10 @@ void MotionInterpolator::stop() {
  */
 bool MotionInterpolator::moveTo(const JointAngles &target, float feedrate) {
     if (!servoCtrl) return false;
+
+    // Поток/пакет активен — joint-движение (в т.ч. с пульта) разорвало бы
+    // траекторию и состояние currentAngles. Честный отказ вместо порчи.
+    if (batchOpen_ || streamBusy()) return false;
 
     // Смена режима (joint) рвёт декартову цепочку: следующий G1 начнёт с останова.
     chainActive_ = false;
@@ -569,9 +895,6 @@ void MotionInterpolator::outputStep(const JointAngles &q) {
         stepCallback(out);
     }
 }
-
-// Доля шагов на разгон/торможение в цепочке блендинга.
-static const float CHAIN_RAMP_FRAC = 0.15f;
 
 /**
  * Профиль e(t) для блендинга: трапеция с косинусными рампами.
