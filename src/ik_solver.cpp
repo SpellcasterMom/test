@@ -86,8 +86,8 @@ IKSolver::IKSolver() {
         servoLimits[i] = DEFAULT_CONFIG.servos[i];
     }
     for (int i = 0; i < 6; i++) {
-        qminRad[i] = servoLimits[i].minAngle * DEG_TO_RAD;
-        qmaxRad[i] = servoLimits[i].maxAngle * DEG_TO_RAD;
+        qminRad[i] = servoLimits[i].minAngle * RAD_PER_DEG;
+        qmaxRad[i] = servoLimits[i].maxAngle * RAD_PER_DEG;
     }
     // Длина пальца (для смещения TCP → запястье)
     fingerLength = GRIPPER_FINGER_LENGTH;
@@ -138,8 +138,8 @@ void IKSolver::setServoLimits(const ServoConfig servos[7]) {
     for (int i = 0; i < 7; i++)
         servoLimits[i] = servos[i];
     for (int i = 0; i < 6; i++) {
-        qminRad[i] = servoLimits[i].minAngle * DEG_TO_RAD;
-        qmaxRad[i] = servoLimits[i].maxAngle * DEG_TO_RAD;
+        qminRad[i] = servoLimits[i].minAngle * RAD_PER_DEG;
+        qmaxRad[i] = servoLimits[i].maxAngle * RAD_PER_DEG;
     }
 }
 
@@ -239,18 +239,18 @@ void IKSolver::decomposeRotation(const Mat4 &R, float &q4, float &q5, float &q6)
     if (sp > 0.9999f) {
         // Замок кардана: pitch = +90°
         q4 = 90.0f;
-        q5 = atan2(R.m[0][1], R.m[1][1]) * RAD_TO_DEG;
+        q5 = atan2(R.m[0][1], R.m[1][1]) * DEG_PER_RAD;
         q6 = 0.0f;
     } else if (sp < -0.9999f) {
         // Замок кардана: pitch = -90°
         q4 = -90.0f;
-        q5 = atan2(-R.m[0][1], R.m[1][1]) * RAD_TO_DEG;
+        q5 = atan2(-R.m[0][1], R.m[1][1]) * DEG_PER_RAD;
         q6 = 0.0f;
     } else {
         // Обычный случай
-        q4 = asin(sp) * RAD_TO_DEG;
-        q5 = atan2(R.m[2][1], R.m[2][2]) * RAD_TO_DEG;
-        q6 = atan2(R.m[1][0], R.m[0][0]) * RAD_TO_DEG;
+        q4 = asin(sp) * DEG_PER_RAD;
+        q5 = atan2(R.m[2][1], R.m[2][2]) * DEG_PER_RAD;
+        q6 = atan2(R.m[1][0], R.m[0][0]) * DEG_PER_RAD;
     }
 }
 
@@ -285,9 +285,9 @@ bool IKSolver::solve(const Pose &target, JointAngles &result) {
     // ================================================================
     // Целевая ориентация → матрица R06, из неё извлекаем ось Z
     // (направление выдвижения пальца в базовой СК).
-    Mat4 R06 = eulerToMatrix(target.orientation.x * DEG_TO_RAD,
-                             target.orientation.y * DEG_TO_RAD,
-                             target.orientation.z * DEG_TO_RAD);
+    Mat4 R06 = eulerToMatrix(target.orientation.x * RAD_PER_DEG,
+                             target.orientation.y * RAD_PER_DEG,
+                             target.orientation.z * RAD_PER_DEG);
     // Ось Z инструмента — третий столбец матрицы R06
     Vec3 toolDir = {R06.m[0][2], R06.m[1][2], R06.m[2][2]};
 
@@ -396,9 +396,9 @@ bool IKSolver::solveArm(float x, float y, float z, bool clamped,
     q2 = atan2(s, r) - atan2(S, C);
 
     // Ноль плеча — ВЕРТИКАЛЬ (как в solvePosition)
-    q1 = q1 * RAD_TO_DEG;
-    q2 = q2 * RAD_TO_DEG - thetaOff[1];
-    q3 = q3 * RAD_TO_DEG;
+    q1 = q1 * DEG_PER_RAD;
+    q2 = q2 * DEG_PER_RAD - thetaOff[1];
+    q3 = q3 * DEG_PER_RAD;
 
     return true;
 }
@@ -456,7 +456,7 @@ bool IKSolver::solveOrientation(float A, float B, float C,
                                  float q1, float q2, float q3,
                                  float &q4, float &q5, float &q6) {
     // Обёртка: один перевод эйлеры→матрица, дальше матричное ядро.
-    Mat4 Rt = eulerToMatrix(A * DEG_TO_RAD, B * DEG_TO_RAD, C * DEG_TO_RAD);
+    Mat4 Rt = eulerToMatrix(A * RAD_PER_DEG, B * RAD_PER_DEG, C * RAD_PER_DEG);
     return solveOrientationM(Rt, q1, q2, q3, q4, q5, q6);
 }
 
@@ -503,9 +503,9 @@ bool IKSolver::solveOrientationM(const Mat4 &Rt, float q1, float q2, float q3,
  */
 bool IKSolver::isReachable(const Pose &target) {
     // Смещаем TCP → запястье
-    Mat4 R06 = eulerToMatrix(target.orientation.x * DEG_TO_RAD,
-                             target.orientation.y * DEG_TO_RAD,
-                             target.orientation.z * DEG_TO_RAD);
+    Mat4 R06 = eulerToMatrix(target.orientation.x * RAD_PER_DEG,
+                             target.orientation.y * RAD_PER_DEG,
+                             target.orientation.z * RAD_PER_DEG);
     Vec3 toolDir = {R06.m[0][2], R06.m[1][2], R06.m[2][2]};
 
     float wx = target.position.x - toolDir.x * fingerLength;
@@ -544,9 +544,9 @@ int IKSolver::solveAll(const Pose &target, JointAngles solutions[4],
 
     // === Коррекция TCP → запястье (Rt считается ОДИН раз на цель;
     // сиды ниже переиспользуют её через solveOrientationM/refineSolutionM) ===
-    Mat4 R06 = eulerToMatrix(target.orientation.x * DEG_TO_RAD,
-                             target.orientation.y * DEG_TO_RAD,
-                             target.orientation.z * DEG_TO_RAD);
+    Mat4 R06 = eulerToMatrix(target.orientation.x * RAD_PER_DEG,
+                             target.orientation.y * RAD_PER_DEG,
+                             target.orientation.z * RAD_PER_DEG);
     Vec3 toolDir = {R06.m[0][2], R06.m[1][2], R06.m[2][2]};
 
     float wx = target.position.x - toolDir.x * fingerLength;
@@ -579,9 +579,9 @@ int IKSolver::solveAll(const Pose &target, JointAngles solutions[4],
         float L1 = a[1];
         float L2 = a[2];
 
-        float q3rad = q3 * DEG_TO_RAD;
+        float q3rad = q3 * RAD_PER_DEG;
         float q2rad = atan2(s, r) - atan2(L2 * sin(q3rad), L1 + L2 * cos(q3rad));
-        q2 = q2rad * RAD_TO_DEG - thetaOff[1];   // в градусы + ноль плеча
+        q2 = q2rad * DEG_PER_RAD - thetaOff[1];   // в градусы + ноль плеча
 
         solveOrientationM(R06, q1, q2, q3, q4, q5, q6);
         solutions[count].setAll(
@@ -771,7 +771,7 @@ bool IKSolver::refineSolutionM(const Vec3 &pt, const Mat4 &Rt,
     const float *qmin = qminRad;
     const float *qmax = qmaxRad;
     for (int i = 0; i < 6; i++) {
-        qr[i] = clampAngle(i, q.angles[i]) * DEG_TO_RAD;
+        qr[i] = clampAngle(i, q.angles[i]) * RAD_PER_DEG;
     }
 
     float e[6];
@@ -783,7 +783,7 @@ bool IKSolver::refineSolutionM(const Vec3 &pt, const Mat4 &Rt,
     for (int k = 0; k < 6; k++) bestQr[k] = qr[k];
     for (int i = 0; i < 6; i++) bestN2 += e[i] * e[i];
 
-    float tolOriW = numTolOri * DEG_TO_RAD * NLS_ORI_W;
+    float tolOriW = numTolOri * RAD_PER_DEG * NLS_ORI_W;
     float tolPos2 = numTolPos * numTolPos;
     float tolOriW2 = tolOriW * tolOriW;
     float enorm2 = bestN2;
@@ -791,7 +791,7 @@ bool IKSolver::refineSolutionM(const Vec3 &pt, const Mat4 &Rt,
     // Расхождение seed'а для диагностики (M115 покажет seed → best)
     if (meta) {
         meta->seedPos = sqrt(e[0]*e[0] + e[1]*e[1] + e[2]*e[2]);
-        meta->seedOri = sqrt(e[3]*e[3] + e[4]*e[4] + e[5]*e[5]) / NLS_ORI_W * RAD_TO_DEG;
+        meta->seedOri = sqrt(e[3]*e[3] + e[4]*e[4] + e[5]*e[5]) / NLS_ORI_W * DEG_PER_RAD;
     }
 
     // Левенберг-Марквардт: λ адаптивная, шаг принимается только если
@@ -902,7 +902,7 @@ bool IKSolver::refineSolutionM(const Vec3 &pt, const Mat4 &Rt,
     if (!converged)
         for (int k = 0; k < 6; k++) qr[k] = bestQr[k];
     for (int i = 0; i < 6; i++)
-        q.angles[i] = clampAngle(i, qr[i] * RAD_TO_DEG);
+        q.angles[i] = clampAngle(i, qr[i] * DEG_PER_RAD);
 
     if (meta) { meta->iters = it; meta->converged = converged; }
     return converged;
@@ -914,8 +914,8 @@ bool IKSolver::refineSolutionM(const Vec3 &pt, const Mat4 &Rt,
  */
 bool IKSolver::refineSolution(const Pose &target, JointAngles &q,
                               IKSolutionMeta *meta) {
-    Mat4 Rt = eulerToMatrix(target.orientation.x * DEG_TO_RAD,
-                            target.orientation.y * DEG_TO_RAD,
-                            target.orientation.z * DEG_TO_RAD);
+    Mat4 Rt = eulerToMatrix(target.orientation.x * RAD_PER_DEG,
+                            target.orientation.y * RAD_PER_DEG,
+                            target.orientation.z * RAD_PER_DEG);
     return refineSolutionM(target.position, Rt, q, meta);
 }

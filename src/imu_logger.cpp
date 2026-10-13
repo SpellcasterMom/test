@@ -290,15 +290,20 @@ void ImuLogger::poll() {
     float gxDps = (gxyz[0] - biasGx_) * IMU_GYRO_MDPS_LSB / 1000.0f;
     float gyDps = (gxyz[1] - biasGy_) * IMU_GYRO_MDPS_LSB / 1000.0f;
     imuFuse(gxDps, gyDps, axMg, ayMg, azMg);
-    float accG = sqrtf(axMg * axMg + ayMg * ayMg + azMg * azMg) / 1000.0f;
-    if (accG > peakAccG_) peakAccG_ = accG;
+    // Пики через квадраты: корень — только в момент нового пика (а не 200 Гц).
+    // Эквивалентно: accG=sqrt(acc2)/1000, новый пик ⟺ acc2>(peak*1000)².
+    float acc2 = axMg * axMg + ayMg * ayMg + azMg * azMg;
+    float peakAccMg = peakAccG_ * 1000.0f;
+    if (acc2 > peakAccMg * peakAccMg) peakAccG_ = sqrtf(acc2) / 1000.0f;
     if (prevAccValid_) {
         float dx = axMg - prevAccMg_[0];
         float dy = ayMg - prevAccMg_[1];
         float dz = azMg - prevAccMg_[2];
-        float jerk = sqrtf(dx * dx + dy * dy + dz * dz) / 1000.0f
-                     / (IMU_PERIOD_MS / 1000.0f);
-        if (jerk > peakJerkGS_) peakJerkGS_ = jerk;
+        float d2 = dx * dx + dy * dy + dz * dz;
+        float dt = IMU_PERIOD_MS / 1000.0f;
+        float peakJerkMg = peakJerkGS_ * 1000.0f * dt;
+        if (d2 > peakJerkMg * peakJerkMg)
+            peakJerkGS_ = sqrtf(d2) / 1000.0f / dt;
     }
     prevAccMg_[0] = axMg; prevAccMg_[1] = ayMg; prevAccMg_[2] = azMg;
     prevAccValid_ = true;
