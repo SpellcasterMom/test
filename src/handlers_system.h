@@ -44,9 +44,14 @@ void handleM112(GCodeCommand &cmd);
 void handleM111(GCodeCommand &cmd);
 
 /**
- * M400 — люфт сервы (°).
+ * M400 — люфт сервы (°). Мёрж в текущие + печать без параметров.
  */
 void handleM400(GCodeCommand &cmd);
+
+/**
+ * applyBacklashConfig() — config -> компенсатор (setup/load/M502).
+ */
+void applyBacklashConfig();
 
 /**
  * M410 — добавить запретную зону.

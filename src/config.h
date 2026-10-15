@@ -52,8 +52,10 @@
 // Правило: любое изменение дефолтов (DH, палец, лимиты, home) = +1.
 // FW_VERSION_STR — человекочитаемая, для M115/boot-лога.
 // ====================================================================
-#define FW_VERSION 12
-#define FW_VERSION_STR "1.9"
+#define FW_VERSION 13
+#define FW_VERSION_STR "2.0"
+// Мажор: ServoConfig.backlashCompensation int16→float (раскладка blob
+// сменилась; миграция сбросит в заводские — люфты там всё равно не жили).
 // Аппаратная ревизия (руками при смене железа; показывает `?`).
 #define HW_VERSION_STR "1.3"
 
@@ -152,7 +154,7 @@ struct ServoConfig {
     uint16_t maxPWM;                      // максимальный PWM (мкс)
     uint16_t maxAngularSpeed;             // максимальная скорость (градусы/с)
     float    correctionFactor;            // корректировка (100.0 = без коррекции)
-    int16_t  backlashCompensation;        // компенсация люфта (градусы)
+    float    backlashCompensation;        // компенсация люфта (float! дроби 0.5 влезут; было int16 — резало)
     bool     isInverted;                  // инверсия направления вращения
     int16_t  homeOffset;                  // ← НОВОЕ: math→servo (135° / 90° / 0°)
     uint8_t  directionCorrection[2];      // корректировка [CW, CCW] (для будущего)
