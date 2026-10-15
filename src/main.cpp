@@ -328,7 +328,6 @@ static void setupHardware() {
 
     Serial.println("=== 6-DOF Robot Arm Controller ===");
     Serial.println("ESP32 @ 240 MHz, PCA9685, 7 servos");
-    Serial.printf("Boot heap free=%lu bytes\n", (unsigned long)ESP.getFreeHeap());
 
     // Создание мьютексов ДО первого использования
     angleMutex = xSemaphoreCreateMutex();
