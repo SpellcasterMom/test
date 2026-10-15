@@ -133,6 +133,7 @@
 #include "imu_logger.h"
 #include "display_ui.h"  // ветка ref-display-ui: LGFX/SharedState/дисплей
 #include "kin_diag.h"    // ветка ref-kin-diag: журнал M115 + handleM115
+#include "handlers_system.h"  // applyBacklashConfig() для setupConfig
 
 // Хаб общего состояния для будущих модулей распила (ветки ref-*):
 // только extern-объявления, дублирует определения ниже. Логики нет.
@@ -414,6 +415,7 @@ static void setupConfig() {
         safety.setFingerLength(config.fingerLength);
         Serial.println("Using default config");
     }
+    applyBacklashConfig();  // люфты из EEPROM/дефолтов — в компенсатор
 
     // Версия прошивки в EEPROM: залита новая (или EEPROM пуст/старого
     // формата — тогда getStoredFwVersion()=0) → заводские + сохранить + ребут.

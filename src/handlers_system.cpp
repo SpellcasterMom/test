@@ -123,16 +123,48 @@ void handleM111(GCodeCommand &cmd) {
 
 /**
  * M400 — установка компенсации люфта.
+ * Мёрж в текущие (незаданные суставы НЕ затираются) + зеркало в config
+ * (иначе M500 сохранит старье — баг fix-backlash-eeprom).
+ * Без параметров — печать текущих.
  */
 void handleM400(GCodeCommand &cmd) {
-    float bl[7] = {};
+    float bl[7];
+    backlash.getAll(bl);  // текущие из компенсатора
+    bool any = false;
     for (int i = 0; i < 7; i++) {
         if (cmd.servoOverride[i]) {
-            bl[i] = cmd.servoAngles.angles[i];
+            float v = cmd.servoAngles.angles[i];
+            if (v < 0) v = 0;  // отрицательный люфт бессмыслен
+            bl[i] = v;
+            config.servos[i].backlashCompensation = v;  // для M500
+            any = true;
         }
     }
+    if (!any) {
+        Serial.print("Backlash:");
+        for (int i = 0; i < 7; i++) {
+            Serial.print(" P");
+            Serial.print(i + 1);
+            Serial.print("=");
+            Serial.print(bl[i], 2);
+        }
+        Serial.println();
+    } else {
+        backlash.setAll(bl);
+    }
+    Serial.println("OK");
+}
+
+/**
+ * applyBacklashConfig() — config -> компенсатор (setup/load/M502).
+ * Без этого загруженные из EEPROM значения никто не подхватывает.
+ */
+void applyBacklashConfig() {
+    float bl[7];
+    for (int i = 0; i < 7; i++) {
+        bl[i] = config.servos[i].backlashCompensation;
+    }
     backlash.setAll(bl);
-    Serial.println("OK: Backlash set");
 }
 
 /**
@@ -368,6 +400,7 @@ void handleM501(GCodeCommand &cmd) {
         ikSolver.setFingerLength(config.fingerLength);   // ← добавить
         fkSolver.setFingerLength(config.fingerLength);
         safety.setFingerLength(config.fingerLength);
+        applyBacklashConfig();  // люфты из EEPROM — в компенсатор
         Serial.println("OK: Loaded from EEPROM");
     } else {
         Serial.println("ERROR: Invalid EEPROM data");
@@ -398,6 +431,7 @@ void handleM502(GCodeCommand &cmd) {
                                     z.skipLinks);
         }
     }
+    applyBacklashConfig();  // заводские люфты — в компенсатор
     Serial.println("OK: Factory defaults loaded");
 }
 
