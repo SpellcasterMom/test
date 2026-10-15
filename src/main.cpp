@@ -281,17 +281,22 @@ void core1Task(void *pvParameters) {
 // setup() — инициализация
 // ====================================================================
 // BMI160 на общей I2C (пины из config.h, Wire уже поднят servoCtrl.init()).
-// TODO(bmi160): маска — один чип (бит0=гиро, бит1=аксель, CHIP_ID 0xD1
-// на 0x68/0x69); магнит/баро уходят. Пока скан старый, GY-80-стиль:
-// бит0=гиро L3G4200D (0x68/0x69 — зависит от запайки SDO),
-// бит1=аксель ADXL345 (0x53), бит2=магнит HMC5883L (0x1E), бит3=баро BMP180 (0x77).
-// Рабочий минимум для наклона и guard'а — гиро+аксель (маска 0x03);
-// магнит нужен только для 9-DOF yaw, баро руке не нужно вовсе.
+// Один чип: CHIP_ID 0xD1 на 0x68/0x69 (SDO) → маска 0x03 (гиро+аксель).
+// Магнита/баро нет (были у GY-80).
 static int bmi160Mask = 0;
 
-static bool i2cPing(uint8_t addr) {
+// Чтение CHIP_ID (-1 при transact-ошибке). Дубль imuReadReg из imu_logger
+// (та статическая, сюда не видна) — скан бежит один раз при boot.
+static int imuChipId(uint8_t addr) {
     Wire.beginTransmission(addr);
-    return Wire.endTransmission() == 0;
+    Wire.write(0x00);
+    if (Wire.endTransmission(false) != 0) return -1;
+    if (Wire.requestFrom(addr, (uint8_t)1) != 1) return -1;
+    unsigned long t0 = millis();
+    while (!Wire.available()) {
+        if (millis() - t0 > 5) return -1;
+    }
+    return Wire.read();
 }
 
 // Состояние GYR-кружка по маске scanBMI160(): один чип — либо есть
@@ -302,12 +307,9 @@ static uint8_t bmi160State() {
 }
 
 static int scanBMI160() {
-    int mask = 0;
-    if (i2cPing(0x68) || i2cPing(0x69)) mask |= 0x01;  // гиро
-    if (i2cPing(0x53)) mask |= 0x02;                   // аксель
-    if (i2cPing(0x1E)) mask |= 0x04;                   // магнит
-    if (i2cPing(0x77)) mask |= 0x08;                   // баро
-    return mask;
+    // Порядок как в imuLogger.begin: сначала 0x69, потом 0x68.
+    if (imuChipId(0x69) == 0xD1 || imuChipId(0x68) == 0xD1) return 0x03;
+    return 0;
 }
 
 // ====================================================================

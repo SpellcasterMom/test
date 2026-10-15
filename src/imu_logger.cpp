@@ -12,14 +12,13 @@
 /*
  * imu_logger.cpp — см. imu_logger.h.
  * Транспорт — голые регистры через Wire, без сторонних либ.
- * TODO(bmi160): карта регистров BMI160 (CHIP_ID, диапазоны, ODR);
- * ниже — карта GY-80 для сверки действующего драйвера:
- *   L3G4200D: WHO_AM_I 0x0F (=0xD3); CTRL_REG4 0x23 = 0x00 (250 dps);
- *     CTRL_REG1 0x20 = 0x6F (ODR 200 Гц, все оси); чтение с OUT_X_L 0x28
- *     + автоинкремент (бит 7); порядок LE.
- *   ADXL345: DEVID 0x00 (=0xE5); POWER_CTL 0x2D: 0/16/8;
- *     DATA_FORMAT 0x31 = 0x0B (full-res + 16g); BW_RATE 0x2C = 0x0C;
- *     чтение с DATAX0 0x32 + multi-byte бит (0x40); порядок LE.
+ * Карта BMI160 (см. дефайны в imu_logger.h):
+ *   CHIP_ID 0x00 (=0xD1); CMD 0x7E: 0x11 acc normal, 0x15 gyro normal
+ *   (прогрев гиро 81 мс); ACC_RANGE 0x41 = 0x0C (±16g);
+ *   ACC_CONF 0x40 = 0x29 (ODR 200 Гц, normal);
+ *   GYR_RANGE 0x43 = 0x03 (±250 dps); GYR_CONF 0x42 = 0x29 (ODR 200 Гц);
+ *   данные с GYRO_DATA 0x0C: 12 байт (гиро XYZ + аксель XYZ, LE,
+ *   автоинкремент штатный — масок не надо).
  */
 
 #include "imu_logger.h"
@@ -66,63 +65,59 @@ static int imuReadReg(uint8_t addr, uint8_t reg) {
     return Wire.read();
 }
 
-// Пакетное чтение 3 осей LE (autoMask: 0x80 гиро / 0x40 аксель-MB).
+// Пакетное чтение гиро+акселя одним burst 12 байт с BMI160_GYRO_DATA.
 // false = шина/чип не ответили в срок (никаких unbounded циклов).
-static bool imuRead6(uint8_t addr, uint8_t reg, uint8_t autoMask,
-                     int16_t out[3]) {
+static bool imuReadGyroAcc(uint8_t addr, int16_t gyro[3], int16_t acc[3]) {
     Wire.beginTransmission(addr);
-    Wire.write(reg | autoMask);
+    Wire.write(BMI160_GYRO_DATA);
     if (Wire.endTransmission(false) != 0) return false;
-    if (Wire.requestFrom(addr, (uint8_t)6) != 6) {
+    if (Wire.requestFrom(addr, (uint8_t)12) != 12) {
         while (Wire.available()) Wire.read();  // подчистить хвост
         return false;
     }
-    uint8_t b[6];
+    uint8_t b[12];
     unsigned long t0 = millis();
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 12; i++) {
         while (!Wire.available()) {
             if (millis() - t0 > 5) return false;
         }
         b[i] = Wire.read();
     }
     for (int i = 0; i < 3; i++) {
-        out[i] = (int16_t)((b[2 * i + 1] << 8) | b[2 * i]);
+        gyro[i] = (int16_t)((b[2 * i + 1] << 8) | b[2 * i]);
+        acc[i]  = (int16_t)((b[2 * i + 7] << 8) | b[2 * i + 6]);
     }
     return true;
 }
 
+// Диапазоны/ODR (и в begin, и в reinit — одна точка правки).
+static void imuConfigRanges(uint8_t addr) {
+    imuWriteReg(addr, BMI160_ACC_RANGE, 0x0C);  // acc ±16g
+    imuWriteReg(addr, BMI160_ACC_CONF, 0x29);   // acc ODR 200 Гц, normal
+    imuWriteReg(addr, BMI160_GYR_RANGE, 0x03);  // gyro ±250 dps
+    imuWriteReg(addr, BMI160_GYR_CONF, 0x29);   // gyro ODR 200 Гц, normal
+}
+
 void ImuLogger::begin(uint8_t mask) {
     // Wire уже поднят (servoCtrl.init). Вызывать из setup, задач ещё нет.
-    if (mask & 0x01) {
-        // Гиро: ищем на 0x69/0x68 по WHO_AM_I, инитим парой записей.
-        uint8_t addr = 0;
-        if (imuReadReg(0x69, 0x0F) == 0xD3) addr = 0x69;
-        else if (imuReadReg(0x68, 0x0F) == 0xD3) addr = 0x68;
-        if (addr) {
-            imuWriteReg(addr, 0x23, 0x00);  // CTRL_REG4: 250 dps
-            imuWriteReg(addr, 0x20, 0x6F);  // CTRL_REG1: ODR 200 Гц, все оси
-            gyroAddr_ = addr;
-            hasGyro_ = true;
-            Serial.println("IMU: gyro L3G4200D OK");
-        } else {
-            Serial.println("IMU: gyro not found (mask said present)");
-        }
+    // Один чип: CHIP_ID 0xD1 на 0x68/0x69 (SDO) → сразу гиро+аксель.
+    if (!(mask & 0x01)) return;
+    uint8_t addr = 0;
+    if (imuReadReg(0x69, BMI160_CHIP_ID) == 0xD1) addr = 0x69;
+    else if (imuReadReg(0x68, BMI160_CHIP_ID) == 0xD1) addr = 0x68;
+    if (!addr) {
+        Serial.println("IMU: BMI160 not found (mask said present)");
+        return;
     }
-    if (mask & 0x02) {
-        // Аксель: DEVID обязан быть 0xE5, дальше те же 5 записей.
-        if (imuReadReg(0x53, 0x00) == 0xE5) {
-            imuWriteReg(0x53, 0x2D, 0);   // wakeup
-            imuWriteReg(0x53, 0x2D, 16);  // auto-sleep
-            imuWriteReg(0x53, 0x2D, 8);   // measure
-            // DATA_FORMAT: FULL_RES(0x08) | range 16g(0x03) => 3.902 мг/LSB
-            imuWriteReg(0x53, 0x31, 0x0B);
-            imuWriteReg(0x53, 0x2C, 0x0C);  // BW_RATE: ODR 200 Гц
-            hasAcc_ = true;
-            Serial.println("IMU: acc ADXL345 OK (16g, full-res, 200Hz)");
-        } else {
-            Serial.println("IMU: acc not found (mask said present)");
-        }
-    }
+    imuWriteReg(addr, BMI160_CMD, 0x11);  // acc normal
+    delay(5);
+    imuWriteReg(addr, BMI160_CMD, 0x15);  // gyro normal
+    delay(100);                           // прогрев гиро (81 мс по даташиту)
+    imuConfigRanges(addr);
+    imuAddr_ = addr;
+    hasGyro_ = true;
+    hasAcc_ = true;
+    Serial.println("IMU: BMI160 OK (16g/250dps/200Hz)");
 }
 
 void ImuLogger::calibrateGyro(uint16_t n) {
@@ -130,9 +125,9 @@ void ImuLogger::calibrateGyro(uint16_t n) {
     // Рука стоит (CALIB поза home + отстойка — делает вызывающий код).
     // Первые 20 сэмплов мимо: переходный после включения.
     long sx = 0, sy = 0, sz = 0;
-    int16_t v[3];
+    int16_t v[3], dummy[3];
     for (uint16_t i = 0; i < (uint16_t)(n + 20); i++) {
-        bool ok = imuRead6(gyroAddr_, 0x28, 0x80, v);
+        bool ok = imuReadGyroAcc(imuAddr_, v, dummy);
         if (!ok) { delay(IMU_PERIOD_MS); continue; }
         if (i < 20) { delay(IMU_PERIOD_MS); continue; }
         sx += v[0]; sy += v[1]; sz += v[2];
@@ -172,17 +167,9 @@ void ImuLogger::push(const ImuSample &s) {
 // Только прямые записи, никакого Wire.begin() — шиной владеет вызывающий
 // (держать i2cMutex!).
 void ImuLogger::reinitChips() {
-    if (hasGyro_) {
-        imuWriteReg(gyroAddr_, 0x23, 0x00);  // 250 dps
-        imuWriteReg(gyroAddr_, 0x20, 0x6F);  // ODR 200 Гц, все оси
-    }
-    if (hasAcc_) {
-        imuWriteReg(0x53, 0x2D, 0);
-        imuWriteReg(0x53, 0x2D, 16);
-        imuWriteReg(0x53, 0x2D, 8);
-        imuWriteReg(0x53, 0x31, 0x0B);
-        imuWriteReg(0x53, 0x2C, 0x0C);
-    }
+    // Чип при просадке шины питание не теряет — только диапазоны/ODR,
+    // без задержек (мьютекс держат остальные молча).
+    imuConfigRanges(imuAddr_);
 }
 
 // Жёсткое восстановление шины: периферия I2C реинитится, чипы — следом.
@@ -252,11 +239,9 @@ void ImuLogger::poll() {
     int16_t axyz[3] = {0, 0, 0};
     int16_t gxyz[3] = {0, 0, 0};
     bool burstOk = true;
-    if (hasAcc_) {
-        if (!imuRead6(0x53, 0x32, 0x40, axyz)) burstOk = false;
-    }
-    if (hasGyro_) {
-        if (!imuRead6(gyroAddr_, 0x28, 0x80, gxyz)) burstOk = false;
+    if (hasGyro_ || hasAcc_) {
+        // Один чип: гиро+аксель одним burst 12 байт (см. imuReadGyroAcc).
+        if (!imuReadGyroAcc(imuAddr_, gxyz, axyz)) burstOk = false;
     }
     if ((hasGyro_ || hasAcc_) && !burstOk) {
         // Дребезг Dupont / просадка: чиним сами, молча до 100 подряд.
