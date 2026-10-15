@@ -4,46 +4,47 @@ Project     : 6DOF arm (CLAW)
 Author      : Vladimir V. Laykov aka Yago
 Alma Mater  : Sevastopol State University
 Date        : 2026-10-05
-Last modify : 2026-10-12
+Last modify : 2026-10-15
 
-Endpoint-control demo: TCP=(200,200,200) стоит, инструмент идёт +X -> вниз.
+Endpoint demo: TCP=(200,200,200) стоит мёртво, запястье гнётся
+на максимум: B 0 → 83.6° → конец (предел по воротам 10мм/15° минус 5° запаса,
+проверено двойником: худший dOri 10.3°). Обратной ноги нет специально:
+возврат B83.6→0 идёт через смену ветви (P3 −170°) с bulge 117 мм —
+паркуемся из максимума штатным G28 H1.
 
-12 шагов G1 (просчитаны в двойнике: dPos<=1мм на всех шагах).
-После каждого шага — M115: фактическая невязка в таблицу и в лог.
-В конце — итог против ворот 10мм/15°.
+11 шагов G1 (просчитаны в двойнике: dPos<=1мм на всех шагах), подача F20 —
+медленно и гладко. Диагностики нет: точки идут пачкой через поток M450
+(S1 → G1… → S0, без остановок на стыках), в конце — отчёт прошивки.
 
-Старт и проверка — как в demo_circle.py: синхронизация с boot
+Старт — как в demo_circle.py: синхронизация с boot
 (баннер / M105 / OK: Home + 5с отстоя), G90 только без ребута,
-G28 H1 → G28, в LOG-режиме живой гироскоп M119 S=2 на время прогона,
-финал — ночёвка в парке G28 H1 (try/finally, работает и при обрыве).
+G28 H1 → G28, финал — ночёвка в парке G28 H1 (try/finally,
+работает и при обрыве).
 
 Использование:
     python demo_endpoint.py [/dev/ttyUSB0] [log]
-    без log — только движения и таблица в консоль;
-    с log — плюс лог-файл endpoint_*.log (команды + дампы M115 + #IMU).
+    без log — только движения; с log — плюс лог-файл endpoint_*.log (команды).
 Требования: pip install pyserial
 """
 
 import os
-import re
 import sys
 import time
 
 import serial
 
 STEPS = [
-    "G1 X200 Y200 Z200 A90.0 B-0.0 C90.0 F30",
-    "G1 X200 Y200 Z200 A96.7 B5.9 C96.7 F30",
-    "G1 X200 Y200 Z200 A104.1 B11.0 C104.1 F30",
-    "G1 X200 Y200 Z200 A112.2 B15.0 C112.2 F30",
-    "G1 X200 Y200 Z200 A121.0 B17.8 C121.0 F30",
-    "G1 X200 Y200 Z200 A130.3 B19.3 C130.3 F30",
-    "G1 X200 Y200 Z200 A139.7 B19.3 C139.7 F30",
-    "G1 X200 Y200 Z200 A149.0 B17.8 C149.0 F30",
-    "G1 X200 Y200 Z200 A157.8 B15.0 C157.8 F30",
-    "G1 X200 Y200 Z200 A165.9 B11.0 C165.9 F30",
-    "G1 X200 Y200 Z200 A173.3 B5.9 C173.3 F30",
-    "G1 X200 Y200 Z200 A-180.0 B-0.0 C-180.0 F30",
+    "G1 X200 Y200 Z200 A90.0 B0.0 C90.0 F20",
+    "G1 X200 Y200 Z200 A96.7 B65.3 C96.7 F20",
+    "G1 X200 Y200 Z200 A104.1 B70.9 C104.1 F20",
+    "G1 X200 Y200 Z200 A112.2 B74.5 C112.2 F20",
+    "G1 X200 Y200 Z200 A121.0 B76.6 C121.0 F20",
+    "G1 X200 Y200 Z200 A130.3 B78.0 C130.3 F20",
+    "G1 X200 Y200 Z200 A139.7 B79.4 C139.7 F20",
+    "G1 X200 Y200 Z200 A149.0 B80.1 C149.0 F20",
+    "G1 X200 Y200 Z200 A157.8 B81.5 C157.8 F20",
+    "G1 X200 Y200 Z200 A165.9 B82.9 C165.9 F20",
+    "G1 X200 Y200 Z200 A173.3 B83.6 C173.3 F20",
 ]
 
 PORT = None
@@ -148,9 +149,8 @@ def open_serial(port):
     return ser, True
 
 
-def send(ser, cmd, timeout=120.0, imu_log=None):
-    """Послать команду, ждать OK/ERROR. imu_log (файл, LOG-режим): пролетающие
-    мимо #IMU-строки живого режима — туда же (иначе потеряются)."""
+def send(ser, cmd, timeout=120.0):
+    """Послать команду, ждать OK/ERROR."""
     ser.read_all()  # сброс несъеденного
     ser.write((cmd + "\n").encode())
     ser.flush()
@@ -161,31 +161,18 @@ def send(ser, cmd, timeout=120.0, imu_log=None):
         while "\n" in buf:
             line, buf = buf.split("\n", 1)
             s = line.strip()
-            if imu_log is not None and s.startswith("#IMU"):
-                imu_log.write(s + "\n")
             if s == "OK" or s.startswith("OK:"):
                 return True, ""
             if s.startswith("ERROR"):
                 return False, s
         time.sleep(0.05)
     # Хвост без перевода строки (прошивка всегда шлёт \n, но дёшево проверить).
-    # #IMU тут не пишем: оборванная строка испортит лог, а целый ответ
-    # мы бы уже разобрали выше.
     s = buf.strip()
     if s == "OK" or s.startswith("OK:"):
         return True, ""
     if s.startswith("ERROR"):
         return False, s
     return False, "TIMEOUT"
-
-
-def m115_raw(ser):
-    """Сырой дамп M115 (не шлёт OK в конце)."""
-    ser.read_all()
-    ser.write(b"M115\n")
-    ser.flush()
-    time.sleep(1.0)
-    return ser.read_all().decode(errors="ignore")
 
 
 def main():
@@ -198,11 +185,11 @@ def main():
                                 "endpoint_" + time.strftime("%Y%m%d_%H%M%S") + ".log")
         log = open(log_path, "w", encoding="utf-8")
     print(f"Порт: {port}")
-    print("Точка (200,200,200), инструмент +X -> вниз, 12 шагов G1,")
-    print(f"  проверка M115 после каждого, ворота 10мм/15°, лог={'вкл' if LOG else 'выкл'}")
+    print("Точка (200,200,200), инструмент +X -> вниз, 11 шагов G1 F20,")
+    print(f"  пачка M450 (без остановок), лог={'вкл' if LOG else 'выкл'}")
     if LOG:
         print(f"  лог: {log_path}")
-        log.write("# endpoint TCP=(200,200,200) steps=12\n")
+        log.write("# endpoint TCP=(200,200,200) steps=11 F20 stream\n")
     ser, rebooted = open_serial(port)
     ser.read_all()
 
@@ -236,63 +223,36 @@ def main():
             print("Раскладка в home не удалась — прогон не запускаю.")
             sys.exit(1)
 
-        if LOG:
-            # Живой гироскоп на время прогона: пишется только при движении,
-            # гаснет повторным S=2 в конце. Пролетающие строки ловим в send().
-            live_on = False
-            ok_live, err_live = send(ser, "M119 S=2", timeout=30.0)
-            print("M119 S=2 (live):", "OK" if ok_live else err_live)
-            log.write(f">> M119 S=2\n<< {'OK' if ok_live else err_live}\n")
-            live_on = ok_live
-
-        print(f"{'шаг':>4} {'dPos':>6} {'dOri':>6}  {'время':>14}  итог")
+        # Поток: копим все точки подряд (буфер прошивки держит ~3 чанка,
+        # OK придерживается сам пока нет места — чанки тут не нужны).
         t_start = time.time()
-        fails = 0
-        maxd = 0.0
-        maxo = 0.0
+        ok, err = send(ser, "M450 S1", timeout=30.0)
+        print("M450 S1:", "OK" if ok else err)
+        if LOG:
+            log.write(f">> M450 S1\n<< {'OK' if ok else err}\n")
+        if not ok:
+            print("Поток не открылся (нужна прошивка со стримингом) — выхожу.")
+            sys.exit(1)
         for k, cmd in enumerate(STEPS):
-            ok, err = send(ser, cmd, timeout=60.0, imu_log=log if LOG else None)
+            ok, err = send(ser, cmd, timeout=120.0)
             stamp = time.strftime("%H:%M:%S") + f" (+{time.time()-t_start:6.1f}c)"
             if LOG:
                 log.write(f">> {cmd}\n<< {'OK' if ok else err}\n")
             if not ok:
-                print(f"{k:>4} {'-':>6} {'-':>6}  {stamp}  {err}")
-                fails += 1
-                continue
-            out = m115_raw(ser)
-            if LOG:
-                log.write(out + ("\n" if not out.endswith("\n") else ""))
-            m = re.search(r"dist=([\d.]+)mm dOri=([\d.]+)deg", out)
-            if m:
-                d, o = float(m.group(1)), float(m.group(2))
-                maxd, maxo = max(maxd, d), max(maxo, o)
-                print(f"{k:>4} {d:>6.1f} {o:>6.1f}  {stamp}  OK")
-            else:
-                print(f"{k:>4} {'?':>6} {'?':>6}  {stamp}  moved, no RESIDUAL parsed")
-        if LOG and live_on:
-            ok_live, err_live = send(ser, "M119 S=2", timeout=30.0)
-            print("M119 S=2 (live off):", "OK" if ok_live else err_live)
-            log.write(f">> M119 S=2\n<< {'OK' if ok_live else err_live}\n")
-            live_on = False
-        verdict = "ПРОШЁЛ" if (fails == 0 and maxd <= 10.0 and maxo <= 15.0) else "НЕ ПРОШЁЛ"
-        print(f"Итог: {len(STEPS)-fails}/{len(STEPS)} шагов, "
-              f"max dPos={maxd:.1f}мм max dOri={maxo:.1f}° "
-              f"(ворота 10/15) — {verdict}")
+                print(f"{k:>4}  ERROR {stamp}  {err} — поток сброшен, выхожу.")
+                sys.exit(1)
+            print(f"{k:>4}  buffered  {stamp}")
+        # Барьер: докачать, исполнить всё без остановок, встать.
+        print("Исполняю поток...")
+        ok, err = send(ser, "M450 S0", timeout=300.0)
+        print("M450 S0:", "OK" if ok else err)
         if LOG:
-            log.write(f"# итог: fails={fails} maxd={maxd:.1f} maxo={maxo:.1f} {verdict}\n")
-        if fails:
-            print("Есть несъеденные шаги — дальше вслепую не едем.")
+            log.write(f">> M450 S0\n<< {'OK' if ok else err}\n")
+        if not ok:
+            print("Поток не доехал — дальше вслепую не едем.")
             sys.exit(1)
+        print("Поток докатан.")
     finally:
-        # Живой режим гасим до финала (иначе парковка тоже польётся в эфир
-        # и останется включённым после выхода). live_on может не существовать
-        # при раннем обрыве — через locals().
-        try:
-            if LOG and locals().get("live_on"):
-                send(ser, "M119 S=2", timeout=30.0)
-                log.write(">> M119 S=2 (live off, финал)\n")
-        except Exception as e:
-            print("Финал: live не погашен:", e)
         # Ночуем в парке: следующий boot считает руку в G28 H1.
         # Работает и при обрыве: лишний G28 H1 из парка — no-op.
         try:
