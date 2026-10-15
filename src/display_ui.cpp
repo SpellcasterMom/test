@@ -32,7 +32,7 @@ void onInterpolationStep(const JointAngles &angles) {
         float q[6];
         for (int i = 0; i < 6; i++) q[i] = angles.angles[i];
         sharedState.tcpPosition = fkSolver.getEndEffector(q);
-        sharedState.gripperPercent = angles.angles[6] / config.servos[6].maxAngle * 100.0f;
+        sharedState.gripperPercent = gripperAngleToPct(angles.angles[6]);
         sharedState.isMoving = true;
         xSemaphoreGive(displayMutex);
     }

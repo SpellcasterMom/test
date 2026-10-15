@@ -107,7 +107,7 @@ def move_joints(P1: float = None, P2: float = None, P3: float = None,
                 P4: float = None, P5: float = None, P6: float = None,
                 P7: float = None, feed: float = None,
                 confirm: bool = False) -> str:
-    """Плавный заезд суставов M104 (лимиты P1–P3 ±135, P4–P6 ±90, P7 0–100)."""
+    """Плавный заезд суставов M104 (лимиты P1–P3 ±135, P4–P6 ±90, P7 7–38°)."""
     err = need_confirm(confirm)
     if err:
         return err

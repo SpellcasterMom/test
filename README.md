@@ -91,8 +91,8 @@ Core 1 — Display + IMU
   (ease-in-out, лимиты, safety).
 - `M105` — углы серв.
 - `M108 S=..` — захват в процентах (0=закрыт,
-  100=открыт; шкала P7 0..100, калибровки
-  миллиметров губок нет — проценты условные).
+  100=открыт; шкала P7 7..38° — закрыт..открыт, замер владельца;
+  калибровки миллиметров губок нет — проценты условные).
 - `M114` — FK: TCP + цепочка J0..J6.
 - `M115 [S=1]` — разбор: цель, запястье,
   кандидаты, выбор, вейпоинты, факт,
@@ -174,7 +174,7 @@ M115  # разбор последнего хода
 | 3             | P4 Wrist pitch | MG90S 2.5 кг, 4.8 В         | ±90°       | 180°/с   |
 | 4             | P5 Wrist roll  | MG90S 2.5 кг, 4.8 В         | ±90°       | 180°/с   |
 | 5             | P6 Wrist yaw   | MG90S 2.5 кг, 4.8 В         | ±90°       | 180°/с   |
-| 6             | P7 Gripper     | MG90S 2.5 кг, 4.8 В         | 0–100%     | 90°/с    |
+| 6             | P7 Gripper     | MG90S 2.5 кг, 4.8 В         | 7–38°      | 90°/с    |
 
 - PCA9685: I2C SDA=21, SCL=22, 100 кГц (подтяжки 11к — только 100; будут 4.7к — вернём 400). BMI160 на той же шине (0x68/0x69), шлейф ≤20 см.
 - MATH-угол 0 = середина сервы (offset 135° для 270°-серв P1–P3, 90° для 180°-серв P4–P6).
@@ -303,14 +303,14 @@ src/
   motion_interpolator.h/.cpp — интерполяция (LIN/SEQ/AUTO/CART) + Q1-блендинг (chainEase) + поток M450 (кольцо/backpressure)
   safety_checker.h/.cpp   — workspace, зоны, zMin, links (skipLink 0)
   backlash_compensator.h/.cpp — компенсация люфта
-  gripper_controller.h/.cpp — захват (P7, проценты)
+  gripper_controller.h/.cpp — захват (P7 7–38°, интерфейс M108 — проценты)
   gcode_parser.h/.cpp     — парсер G-code
   eeprom_storage.h/.cpp   — blob конфигурации + FW-миграция
   detour_planner.h/.cpp   — объезд (via + RRT, детерминированный)
   jog_pendant.h/.cpp      — ручной пульт (штурвал/NEXT/E-STOP)
   imu_logger.h/.cpp       — BMI160: опрос 200 Гц, фьюжн, кольцо 4096 (~20 с), метки f, live S=2, M119
 tools/ — раннеры Serial + TCP-клиент + двойник (подробно: tools/README.md)
-  jogger.py (клавиатурный джог P1–P7, 0=все в 0, ~=M105),
+  jogger.py (клавиатурный джог P1–P7, 0=все в 0 + P7 закрыт, ~=M105),
   tcp_console.py (G-code по TCP-мосту),
   demo_circle.py (tilt/plusx; поток M450, boot-sync, live-захват #IMU, финал G28 H1),
   demo_endpoint.py (12 шагов + M115, boot-sync, финал G28 H1), demo.py,

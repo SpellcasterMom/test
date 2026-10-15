@@ -89,7 +89,7 @@ void handleG0(GCodeCommand &cmd) {
             // Оцениваем каждое решение (FK + ошибки + safety) для M115
             for (int i = 0; i < solCount && diagLast.solCount < 4; i++) {
                 if (cmd.hasGripper) {
-                    solutions[i].angles[6] = cmd.pose.gripper;
+                    solutions[i].angles[6] = gripperPctToAngle(cmd.pose.gripper);
                 }
                 diagEvalSol(diagLast.sols[diagLast.solCount], solutions[i], effPose);
                 diagLast.sols[diagLast.solCount].iters = metas[i].iters;
@@ -110,7 +110,7 @@ void handleG0(GCodeCommand &cmd) {
                 IKSolutionMeta curMeta;
                 ikSolver.refineSolution(effPose, curSeed, &curMeta);
                 if (cmd.hasGripper) {
-                    curSeed.angles[6] = cmd.pose.gripper;
+                    curSeed.angles[6] = gripperPctToAngle(cmd.pose.gripper);
                 }
                 diagEvalSol(diagLast.sols[diagLast.solCount], curSeed, effPose);
                 diagLast.sols[diagLast.solCount].iters = curMeta.iters;
@@ -303,7 +303,7 @@ void handleG0(GCodeCommand &cmd) {
         float q[6];
         for (int i = 0; i < 6; i++) q[i] = target.angles[i];
         sharedState.tcpPosition = fkSolver.getEndEffector(q);
-        sharedState.gripperPercent = target.angles[6] / config.servos[6].maxAngle * 100.0f;
+        sharedState.gripperPercent = gripperAngleToPct(target.angles[6]);
         sharedState.isMoving = false;
         sharedState.hasError = false;
         sharedState.commandCount++;
@@ -407,7 +407,7 @@ void handleG1(GCodeCommand &cmd) {
 
     for (int i = 0; i < solCount && diagLast.solCount < 4; i++) {
         if (cmd.hasGripper) {
-            solutions[i].angles[6] = cmd.pose.gripper;
+            solutions[i].angles[6] = gripperPctToAngle(cmd.pose.gripper);
         }
         diagEvalSol(diagLast.sols[diagLast.solCount], solutions[i], effPose);
         diagLast.sols[diagLast.solCount].iters = metas[i].iters;
@@ -537,7 +537,7 @@ void handleG1(GCodeCommand &cmd) {
         float q[6];
         for (int i = 0; i < 6; i++) q[i] = done.angles[i];
         sharedState.tcpPosition = fkSolver.getEndEffector(q);
-        sharedState.gripperPercent = done.angles[6] / config.servos[6].maxAngle * 100.0f;
+        sharedState.gripperPercent = gripperAngleToPct(done.angles[6]);
         sharedState.isMoving = false;
         sharedState.hasError = false;
         sharedState.commandCount++;
@@ -638,7 +638,7 @@ void handleG28(GCodeCommand &cmd) {
         float q[6];
         for (int i = 0; i < 6; i++) q[i] = target.angles[i];
         sharedState.tcpPosition = fkSolver.getEndEffector(q);
-        sharedState.gripperPercent = target.angles[6] / config.servos[6].maxAngle * 100.0f;
+        sharedState.gripperPercent = gripperAngleToPct(target.angles[6]);
         sharedState.isMoving = false;
         sharedState.commandCount++;
         xSemaphoreGive(displayMutex);
@@ -703,7 +703,7 @@ void handleM104(GCodeCommand &cmd) {
         float q[6];
         for (int i = 0; i < 6; i++) q[i] = target.angles[i];
         sharedState.tcpPosition = fkSolver.getEndEffector(q);
-        sharedState.gripperPercent = target.angles[6] / config.servos[6].maxAngle * 100.0f;
+        sharedState.gripperPercent = gripperAngleToPct(target.angles[6]);
         sharedState.isMoving = false;
         sharedState.hasError = false;
         sharedState.commandCount++;
@@ -728,7 +728,7 @@ void handleM104(GCodeCommand &cmd) {
 
 /**
  * M108 — захват в процентах: M108 S=50 (0=закрыт, 100=открыт).
- * P7 живёт в math-шкале 0..100, поэтому процент = угол 1:1.
+ * P7 живёт в градусах сервы (закрыт 7°, открыт 38°): процент маппится.
  * Едет только сустав 6 через тот же interpolator, что M104.
  */
 void handleM108(GCodeCommand &cmd) {
@@ -751,7 +751,7 @@ void handleM108(GCodeCommand &cmd) {
     if (pct < 0.0f) pct = 0.0f;
     if (pct > 100.0f) pct = 100.0f;
     JointAngles target = currentAngles;
-    target.angles[6] = pct;
+    target.angles[6] = gripperPctToAngle(pct);
     float feedrate = cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE;
     interpolator.setCurrentAngles(currentAngles);
     if (interpolator.moveTo(target, feedrate)) {

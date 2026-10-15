@@ -58,7 +58,7 @@ def test_finish_no_ok():
 
 def test_m104_ok():
     assert commands.build_m104({"P1": 10, "P4": -5}) == "M104 P1=10 P4=-5"
-    assert commands.build_m104({"P7": 50}, 300) == "M104 P7=50 F300"
+    assert commands.build_m104({"P7": 20}, 300) == "M104 P7=20 F300"
 
 
 def test_m104_limits():
@@ -68,6 +68,10 @@ def test_m104_limits():
         commands.build_m104({"P4": 91})
     with pytest.raises(ValidationError):
         commands.build_m104({"P7": -1})
+    with pytest.raises(ValidationError):
+        commands.build_m104({"P7": 50})  # захват: градусы 7..38, не проценты
+    assert commands.build_m104({"P7": 7}) == "M104 P7=7"
+    assert commands.build_m104({"P7": 38}) == "M104 P7=38"
     with pytest.raises(ValidationError):
         commands.build_m104({})
 

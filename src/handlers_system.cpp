@@ -368,7 +368,7 @@ void handleM450(GCodeCommand &cmd) {
             float q[6];
             for (int i = 0; i < 6; i++) q[i] = done.angles[i];
             sharedState.tcpPosition = fkSolver.getEndEffector(q);
-            sharedState.gripperPercent = done.angles[6] / config.servos[6].maxAngle * 100.0f;
+            sharedState.gripperPercent = gripperAngleToPct(done.angles[6]);
             sharedState.isMoving = false;
             sharedState.hasError = false;
             sharedState.commandCount++;

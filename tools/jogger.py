@@ -11,7 +11,7 @@ Last modify : 2026-10-07
 Пары клавиш на серву (+/-):  q/a=P1  w/s=P2  e/d=P3  r/f=P4
                               t/g=P5  y/h=P6  u/j=P7
 Строчная буква — шаг 5°, ЗАГЛАВНАЯ (Shift) — шаг 25°.
-`0` — все сервы в 0 (M104 P1=0 .. P7=0).
+`0` — все сервы в 0 (M104 P1=0 .. P6=0; P7=7 закрыт).
 `~` — опросить M105 и показать что вернулось.
 `?` — помощь.  Esc / Ctrl-C — выход.
 
@@ -40,9 +40,9 @@ STEP_SMALL = 5.0
 STEP_BIG = 25.0
 
 # Лимиты math-углов (зеркало DEFAULT_SERVO_CONFIG из src/config.h):
-# P1-P3 ±135, P4-P6 ±90, P7 0..100. Джог дальше лимита не шлёт —
+# P1-P3 ±135, P4-P6 ±90, P7 7..38 (закрыт..открыт). Джог дальше лимита не шлёт —
 # иначе локальный угол убегает от реального (прошивка режет молча).
-SERVO_LIMITS = [(-135.0, 135.0)] * 3 + [(-90.0, 90.0)] * 3 + [(0.0, 100.0)]
+SERVO_LIMITS = [(-135.0, 135.0)] * 3 + [(-90.0, 90.0)] * 3 + [(7.0, 38.0)]
 
 
 def clamp_angle(idx, value):
@@ -203,15 +203,15 @@ def main():
                 print(HELP)
                 continue
             if ch == '0':
-                cmd = " ".join([f"P{i+1}=0" for i in range(7)])
+                cmd = " ".join([f"P{i+1}=0" for i in range(6)] + ["P7=7"])
                 cmd = "M104 " + cmd
-                print(f">> {cmd}   (все в 0)", flush=True)
+                print(f">> {cmd}   (все в 0, захват закрыт)", flush=True)
                 res, rlines = send(ser, cmd, 30)
                 err = next((l for l in rlines if l.upper().startswith("ERROR")), None)
                 if err:
                     print(f"  < {err} — углы НЕ обновлены", flush=True)
                 else:
-                    angles = [0.0] * 7
+                    angles = [0.0] * 6 + [7.0]
                     print(f"  < {res}", flush=True)
                 print(flush=True)
                 kb.drain()
