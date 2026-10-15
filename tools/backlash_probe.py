@@ -251,10 +251,28 @@ def main():
         if not ok:
             print("G90 не прошёл — дальше вслепую не едем.")
             sys.exit(1)
-        # Обнуляем компенсацию: подпор на реверсе иначе исказит замер.
-        # Старые значения нигде не прочитать — считаем, что были нули
-        # (если что-то стояло — верни руками, зонд предупредит в итоге).
-        ok, _ = emit("M400 " + " ".join(f"P{i}=0" for i in range(1, 7)))
+        # Текущие люфты (M400 без параметров печатает; на старой прошивке
+        # без печати — считаем нулями). P7 не меряем (другие единицы),
+        # но сохраняем как есть.
+        old_bl = [0.0] * 7
+        ser.read_all()
+        ser.write(b"M400\n")
+        ser.flush()
+        time.sleep(0.5)
+        m400 = ser.read_all().decode(errors="ignore")
+        if LOG:
+            log.write(">> M400\n" + m400 + "\n")
+        vals = [float(v) for v in re.findall(r"P[1-7]=([-\d.]+)", m400)[:7]]
+        if len(vals) == 7:
+            old_bl = vals
+            print("Текущие:", " ".join(f"P{i+1}={old_bl[i]:.2f}" for i in range(7)))
+        else:
+            print("M400 без печати (старая прошивка?) — считаю старые нулями.")
+        # Обнуляем компенсацию P1–P6 (P7 сохраняем): подпор на реверсе
+        # иначе исказит замер.
+        zero_cmd = "M400 " + " ".join(
+            [f"P{i}=0" for i in range(1, 7)] + [f"P7={old_bl[6]:.2f}"])
+        ok, _ = emit(zero_cmd)
         if not ok:
             print("M400 не прошёл — замер без обнуления врёт, выхожу.")
             sys.exit(1)
@@ -384,21 +402,20 @@ def main():
             print("M119 S=2 (live off): OK")
             live_on = False
         print("=== Итог (градусы) ===")
-        sug = []
+        # Полный набор P1..P7 (P7 и немереные — старые значения, не нули!).
+        final = list(old_bl)
         for j in JOINTS:
             mp, mn, mean_dead, n, nan = results.get(j, (None, None, None, 0, 0))
             if mean_dead is not None:
                 print(f"P{j}: люфт ≈ {mean_dead:.2f}  (+{mp:.2f} / -{mn:.2f})")
-                sug.append(f"P{j}={mean_dead:.2f}")
+                final[j - 1] = round(mean_dead, 2)
             else:
-                print(f"P{j}: люфт ≈ ? (нет данных)")
-        if sug:
-            line = "M400 " + " ".join(sug)
-            print("Применить (рантайм, без сохранения):", line)
-            ok, _ = send(ser, line, timeout=30.0)
-            print("M400:", "OK" if ok else "не встал — введи руками")
-            print("Сохранить навсегда: M500 (после проверки реверсом!)")
-        print("Старые значения M400 занулены зондом — если что-то стояло, верни руками.")
+                print(f"P{j}: люфт ≈ ? (нет данных, оставляю {old_bl[j-1]:.2f})")
+        line = "M400 " + " ".join(f"P{i+1}={final[i]:.2f}" for i in range(7))
+        print("Применить (рантайм, без сохранения):", line)
+        ok, _ = send(ser, line, timeout=30.0)
+        print("M400:", "OK" if ok else "не встал — введи руками")
+        print("Сохранить навсегда: M500 (после проверки реверсом!)")
     finally:
         try:
             if LOG and locals().get("live_on"):
