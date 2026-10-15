@@ -261,7 +261,7 @@ void ImuLogger::poll() {
     s.flags = 0;
     if (segComputed_) s.flags |= 0x08;  // бит3: вычисленная декартова траектория
     if (pendingMark_) {
-        s.flags = pendingIsStart_ ? 0x01 : 0x02;
+        s.flags |= pendingIsStart_ ? 0x01 : 0x02;
         marks_++;
         pendingMark_ = false;
     }
