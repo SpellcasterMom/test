@@ -34,7 +34,7 @@
  * Для P7 (gripper)  homeOffset =   0°.
  *
  * minAngle/maxAngle остаются в МАТЕМАТИЧЕСКОМ диапазоне
- * (-135..+135 для P1–P3, -90..+90 для P4–P6, 0..100 для P7) —
+ * (-135..+135 для P1–P3, -90..+90 для P4–P6, 7..38 для P7) —
  * их использует safety. ServoController сам прибавляет homeOffset
  * перед конвертацией в PWM.
  */
@@ -52,8 +52,9 @@
 // Правило: любое изменение дефолтов (DH, палец, лимиты, home) = +1.
 // FW_VERSION_STR — человекочитаемая, для M115/boot-лога.
 // ====================================================================
-#define FW_VERSION 14
-#define FW_VERSION_STR "2.1"
+#define FW_VERSION 16
+#define FW_VERSION_STR "2.3"
+// Минор: P7 min/max 0/100 → 7/38 + IMU-кольцо ×2 слота — миграция обновит.
 // Мажор: ServoConfig.backlashCompensation int16→float (раскладка blob
 // сменилась; миграция сбросит в заводские — люфты там всё равно не жили).
 // Аппаратная ревизия (руками при смене железа; показывает `?`).
@@ -256,7 +257,7 @@ struct ManipulatorConfig {
 //   При q_math = 0 физический угол сервы = homeOffset.
 //   Для P1–P3 (270°): 0 → 135° (середина)
 //   Для P4–P6 (180°): 0 →  90° (середина)
-//   Для P7 (gripper): 0 →   0°
+//   Для P7 (gripper): 0 →   0° (math = servo; закрыт 7°, открыт 38° — замер владельца)
 const ServoConfig DEFAULT_SERVO_CONFIG[7] = {
     // id, minA, maxA, minPWM, maxPWM, speed, correction, backlash, inverted, homeOffset, {CW, CCW}
     {0, -135, 135,  500, 2500, 45, 100, 2, false, 135, {0, 0}},   // Base         math 0 → servo 135 (прямая: M502-тест DH− при T)
@@ -265,8 +266,24 @@ const ServoConfig DEFAULT_SERVO_CONFIG[7] = {
     {3,  -90,  90,  500, 2500, 180, 100, 1, true,   90, {0, 0}},   // Wrist pitch  math 0 → servo  90 (зеркальная: P4-тест ±30 с −1000)
     {4,  -90,  90,  500, 2500, 180, 100, 1, false,  90, {0, 0}},   // Wrist roll   math 0 → servo  90
     {5,  -90,  90,  500, 2500, 180, 100, 1, false,  90, {0, 0}},   // Wrist yaw    math 0 → servo  90
-    {6,    0, 100,  500, 2500,  90, 100, 0, false,   0, {0, 0}},   // Gripper      без offset
+    {6,    7,  38,  500, 2500,  90, 100, 0, false,   0, {0, 0}},   // Gripper      закрыт 7°, открыт 38° (замер владельца), без offset
 };
+
+// Ход захвата, градусы сервы (замер владельца 15.10.2026).
+// Проценты M108/G0-J переводятся сюда хелперами ниже (интерфейс остался 0..100).
+#define GRIP_CLOSED_DEG 7.0f    // закрыт
+#define GRIP_OPEN_DEG 38.0f     // открыт
+inline float gripperPctToAngle(float pct) {
+    if (pct < 0.0f) pct = 0.0f;
+    if (pct > 100.0f) pct = 100.0f;
+    return GRIP_CLOSED_DEG + (GRIP_OPEN_DEG - GRIP_CLOSED_DEG) * (pct / 100.0f);
+}
+inline float gripperAngleToPct(float angle) {
+    float pct = (angle - GRIP_CLOSED_DEG) / (GRIP_OPEN_DEG - GRIP_CLOSED_DEG) * 100.0f;
+    if (pct < 0.0f) pct = 0.0f;
+    if (pct > 100.0f) pct = 100.0f;
+    return pct;
+}
 
 // ====================================================================
 // Конфигурация по умолчанию
@@ -299,13 +316,13 @@ const ManipulatorConfig DEFAULT_CONFIG = {
 //
 // ВАЖНО: углы здесь МАТЕМАТИЧЕСКИЕ (q_math), ноль плеча = вертикаль.
 // При q_math = 0 серва встанет на homeOffset (135° для P1–P3, 90° для P4–P6).
-const float DEFAULT_HOME_ANGLES[7] = {0, 0, 0, 0, 0, 0, 0};
+const float DEFAULT_HOME_ANGLES[7] = {0, 0, 0, 0, 0, 0, 7};
 
 // Парковочная поза (сложенная, для ночи и перевозки). Углы от владельца
 // (проверены на железе): P3=135 на лимите, но clamp держит.
 // Конвенция: перед выключением — G28 H1; старт всегда едет парк→home,
 // считая, что рука ночевала в парке (см. setup()).
-const float DEFAULT_PARK_ANGLES[7] = {35, -120, 135, 65, 0, 0, 0};
+const float DEFAULT_PARK_ANGLES[7] = {35, -120, 135, 65, 0, 0, 7};
 
 // ====================================================================
 // Параметры движения

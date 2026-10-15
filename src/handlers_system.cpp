@@ -17,9 +17,10 @@
 #include <cstring>
 
 /**
-  * M119 — телеметрия IMU (BMI160): живые значения, пики, дамп кольца.
- *   M119          — живые: наклон, последние counts, bias, пики, счётчик
- *   M119 S=1      — дамп кольца текстом (#IMU строки + OK в конце)
+  * M119 — телеметрия IMU (BMI160): живые значения, пики, дамп слота.
+ *   M119          — живые: наклон, последние counts, bias, пики, счётчики слотов
+ *   M119 S=1      — дамп слота текстом (#SLOT, #IMU строки + OK в конце)
+ *   M119 S=1 T=0  — слот одиночек; T=1 — слот пачек; без T — последний активный
  *   M119 S=1 D=4  — дамп каждого 4-го сэмпла (быстрее)
  *   M119 S=2      — живой поток #IMU (тоггл): сэмплы идут сразу, только
  *                   при движении; гаснет повторным S=2 или M112
@@ -44,16 +45,22 @@ void handleM119(GCodeCommand &cmd) {
         imuLogger.getLast(last);
         float bx, by, bz;
         imuLogger.getBiasDps(bx, by, bz);
+        int ps = imuLogger.lastActiveSlot();
         float pkA, pkJ;
-        imuLogger.getPeaks(pkA, pkJ);
+        imuLogger.getPeaks(ps, pkA, pkJ);
         Serial.printf("IMU: tilt R=%.1f P=%.1f\n", tr, tp);
         Serial.printf("IMU: last ax=%d ay=%d az=%d gx=%d gy=%d gz=%d\n",
                       last[0], last[1], last[2], last[3], last[4], last[5]);
         Serial.printf("IMU: bias dps gx=%.2f gy=%.2f gz=%.2f\n", bx, by, bz);
-        Serial.printf("IMU: peak acc=%.2fg jerk=%.1fg/s log n=%lu marks=%lu rec=%d\n",
-                      pkA, pkJ, (unsigned long)imuLogger.sampleCount(),
-                      (unsigned long)imuLogger.markCount(),
-                      imuLogger.isRecording() ? 1 : 0);
+        Serial.printf("IMU: peak acc=%.2fg jerk=%.1fg/s (slot %s)\n",
+                      pkA, pkJ, ps == 1 ? "batch" : "single");
+        Serial.printf("IMU: single n=%lu m=%lu rec=%d | batch n=%lu m=%lu rec=%d\n",
+                      (unsigned long)imuLogger.sampleCount(0),
+                      (unsigned long)imuLogger.markCount(0),
+                      imuLogger.isRecording(0) ? 1 : 0,
+                      (unsigned long)imuLogger.sampleCount(1),
+                      (unsigned long)imuLogger.markCount(1),
+                      imuLogger.isRecording(1) ? 1 : 0);
         Serial.printf("IMU: bus fails=%lu recovers=%lu\n",
                       (unsigned long)imuLogger.busFails(),
                       (unsigned long)imuLogger.busRecovers());
@@ -63,9 +70,19 @@ void handleM119(GCodeCommand &cmd) {
     uint8_t decim = 1;
     if (cmd.hasParam['D' - 'A'] && cmd.params['D' - 'A'] >= 1.0f)
         decim = (uint8_t)cmd.params['D' - 'A'];
-    imuLogger.setHold(true);   // заморозить кольцо на время печати
-    imuLogger.dump(decim);
-    imuLogger.setHold(false);
+    // T=0 single, T=1 batch; без T — последний активный слот.
+    int slot = imuLogger.lastActiveSlot();
+    if (cmd.hasParam['T' - 'A']) {
+        int tVal = (int)cmd.params['T' - 'A'];
+        if (tVal != 0 && tVal != 1) {
+            Serial.println("ERROR: M119 T=0/1");
+            return;
+        }
+        slot = tVal;
+    }
+    imuLogger.setHold(slot, true);   // заморозить слот на время печати
+    imuLogger.dump(slot, decim);
+    imuLogger.setHold(slot, false);
 }
 
 void handleM105(GCodeCommand &cmd) {
@@ -351,7 +368,7 @@ void handleM450(GCodeCommand &cmd) {
             float q[6];
             for (int i = 0; i < 6; i++) q[i] = done.angles[i];
             sharedState.tcpPosition = fkSolver.getEndEffector(q);
-            sharedState.gripperPercent = done.angles[6] / config.servos[6].maxAngle * 100.0f;
+            sharedState.gripperPercent = gripperAngleToPct(done.angles[6]);
             sharedState.isMoving = false;
             sharedState.hasError = false;
             sharedState.commandCount++;
@@ -454,7 +471,7 @@ void handleHelp(GCodeCommand &cmd) {
     Serial.println("M104 P1=90 P2=0 ..            - Set servo angles directly");
     Serial.println("M105                          - Report servo angles");
     Serial.println("M108 S=50                     - Set gripper (percent 0-100)");
-    Serial.println("M119 [S=1] [S=2] [D=4]          - IMU live / dump ring / live stream");
+    Serial.println("M119 [S=1] [S=2] [D=4] [T=0/1]   - IMU live / dump slot / live stream");
     Serial.println("M450 S=1|S=0|S=2              - Batch stream: open/run/abort (no stops)");
     Serial.println("M114                          - Report position (FK)");
     Serial.println("M115 [S=1]                    - Kinematics diag (target/sols/actual)");

@@ -39,7 +39,7 @@
  * получать корректные углы через ServoController::setAngle().
  *
  * minAngle/maxAngle в config.h остаются в МАТЕМАТИЧЕСКОМ диапазоне
- * (-135..+135, -90..+90, 0..100). homeOffset прибавляется ВНУТРИ
+ * (-135..+135, -90..+90, 7..38). homeOffset прибавляется ВНУТРИ
  * setAngle() и computePulseUs() перед конвертацией в PWM.
  */
 class ServoController {
