@@ -37,11 +37,13 @@ import math
 
 import serial
 
-AMP = 2.0       # полуразмах качания, градусы
-STEP = 0.5      # шаг, градусы (разрешение замера)
+AMP = 5.0       # полуразмах качания, градусы (нога 10°: люфт до 10° виден,
+                # ожидаемые 0.5-3° — запас 3x; весь прогон ~3 мин на F10)
+STEP = 0.5      # шаг, градусы (разрешение замера; 20 шагов/ногу)
 CYCLES = 2      # треугольников на сустав (реверсов: 2 на цикл)
-FEED = 60       # подача качания (тихо, без звона)
-SETTLE = 0.2    # отстой после шага, с (затухание звона)
+FEED = 10       # подача качания, % от maxAngularSpeed (тихо, квазистатика:
+                # P1-3 ~4.5°/с, P4-6 ~18°/с — сигнал 4x+ над порогом ~1 dps)
+SETTLE = 0.15   # отстой после шага, с (на малой подаче звона почти нет)
 BLANK = 0.1     # глухота после реверса, с (переходный)
 
 PORT = None
@@ -351,6 +353,7 @@ def main():
             lo, hi = cen - AMP, cen + AMP
             print(f"--- P{j} (центр {cen:.1f}) ---")
             reversals = []
+            mark = len(samples)  # сэмплы этого сустава — для sanity ниже
             # Разгонная нога к верху (слабина неизвестно с какой стороны).
             ok, _ = send(ser, f"M104 P{j}={hi:.2f} F{FEED}", timeout=60.0,
                          imu_hook=hook)
@@ -397,6 +400,18 @@ def main():
             # Возврат в центр (без детекта).
             send(ser, f"M104 P{j}={cen:.2f} F{FEED}", timeout=60.0, imu_hook=hook)
             time.sleep(SETTLE)
+            # Sanity: гиро вообще оживал за сустав? Если max ~ шум —
+            # либо люфт шире ноги (увеличивай AMP), либо движения не было
+            # (смотри глазами, проверь safety/связь).
+            peak = 0.0
+            for _, gx, gy, gz in samples[mark:]:
+                m = math.sqrt(sum(((v - b) * gyro_lsb / 1000.0) ** 2
+                                  for v, b in zip((gx, gy, gz), bias)))
+                peak = max(peak, m)
+            print(f"P{j}: пик |w| за прогон {peak:.1f} dps"
+                  f"{' — гиро молчал, итогу не верь' if peak < thr else ''}")
+            if LOG:
+                log.write(f"# P{j} peak {peak:.1f} dps\n")
         if live_on:
             send(ser, "M119 S=2", timeout=30.0)
             print("M119 S=2 (live off): OK")
