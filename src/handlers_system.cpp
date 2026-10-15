@@ -17,7 +17,7 @@
 #include <cstring>
 
 /**
- * M119 — телеметрия IMU (GY-80): живые значения, пики, дамп кольца.
+  * M119 — телеметрия IMU (BMI160): живые значения, пики, дамп кольца.
  *   M119          — живые: наклон, последние counts, bias, пики, счётчик
  *   M119 S=1      — дамп кольца текстом (#IMU строки + OK в конце)
  *   M119 S=1 D=4  — дамп каждого 4-го сэмпла (быстрее)
@@ -26,7 +26,7 @@
  */
 void handleM119(GCodeCommand &cmd) {
     if (!imuLogger.hasGyro() && !imuLogger.hasAcc()) {
-        Serial.println("IMU: none (GY-80 not found)");
+        Serial.println("IMU: none (BMI160 not found)");
         Serial.println("OK");
         return;
     }
