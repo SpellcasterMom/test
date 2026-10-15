@@ -85,7 +85,7 @@
  *   │ Gripper:   50%                      │
  *   ├─────────────────────────────────────┤  y=176
  *   │ READY           ABS            123  │  статус + режим + счётчик
- *   │ Safe:ON     PCA:●     GYR:●          │  режимы текстом; кружки: PCA зел/красн, GYR зел=гиро+аксель, жёлт=только гиро, красн=нет гиро
+  *   │ Safe:ON     PCA:●     GYR:●          │  режимы текстом; кружки: PCA зел/красн, GYR зел=чип есть, красн=нет гиро
  *   │ G28                                 │  последняя команда
  *   └─────────────────────────────────────┘  y=240
  *
@@ -176,9 +176,9 @@ SafetyChecker        safety;
 GripperController    gripper;
 JogPendant           pendant;   // ручной пульт: штурвал + NEXT + E-STOP
 DetourPlanner        detour;    // объезд запретных зон: план вейпоинтов
-ImuLogger            imuLogger; // GY-80: опрос 200 Гц + кольцо последнего движения
+ImuLogger            imuLogger; // BMI160: опрос 200 Гц + кольцо последнего движения
 
-// Мьютекс общей шины I2C (PCA9685 на Core 0 + GY-80 на Core 1).
+// Мьютекс общей шины I2C (PCA9685 на Core 0 + BMI160 на Core 1).
 // Создаётся первым в setup; брать только вокруг коротких транзакций.
 SemaphoreHandle_t    i2cMutex = NULL;
 
@@ -280,34 +280,36 @@ void core1Task(void *pvParameters) {
 // ====================================================================
 // setup() — инициализация
 // ====================================================================
-// GY-80 на общей I2C (пины из config.h, Wire уже поднят servoCtrl.init()).
-// Возвращает битовую маску найденных чипов: бит0=гиро L3G4200D (0x68/0x69 —
-// зависит от запайки SDO), бит1=аксель ADXL345 (0x53),
-// бит2=магнит HMC5883L (0x1E), бит3=баро BMP180 (0x77).
-// Рабочий минимум для наклона и guard'а — гиро+аксель (маска 0x03);
-// магнит нужен только для 9-DOF yaw, баро руке не нужно вовсе.
-static int gy80Mask = 0;
+// BMI160 на общей I2C (пины из config.h, Wire уже поднят servoCtrl.init()).
+// Один чип: CHIP_ID 0xD1 на 0x68/0x69 (SDO) → маска 0x03 (гиро+аксель).
+// Магнита/баро нет (были у GY-80).
+static int bmi160Mask = 0;
 
-static bool i2cPing(uint8_t addr) {
+// Чтение CHIP_ID (-1 при transact-ошибке). Дубль imuReadReg из imu_logger
+// (та статическая, сюда не видна) — скан бежит один раз при boot.
+static int imuChipId(uint8_t addr) {
     Wire.beginTransmission(addr);
-    return Wire.endTransmission() == 0;
+    Wire.write(0x00);
+    if (Wire.endTransmission(false) != 0) return -1;
+    if (Wire.requestFrom(addr, (uint8_t)1) != 1) return -1;
+    unsigned long t0 = millis();
+    while (!Wire.available()) {
+        if (millis() - t0 > 5) return -1;
+    }
+    return Wire.read();
 }
 
-// Состояние GYR-кружка по маске scanGY80():
-// 2 = гиро+аксель (зелёный), 1 = только гиро (жёлтый), 0 = нет гиро (красный).
-// Магнит для кружка не нужен (только для будущего 9-DOF yaw).
-static uint8_t gy80State() {
-    if (!(gy80Mask & 0x01)) return 0;
-    return (gy80Mask & 0x02) ? 2 : 1;
+// Состояние GYR-кружка по маске scanBMI160(): один чип — либо есть
+// всё сразу, либо ничего. 2 = чип найден (зелёный), 0 = нет гиро (красный).
+// Жёлтого состояния больше нет (было «только гиро» у GY-80 из 4 чипов).
+static uint8_t bmi160State() {
+    return (bmi160Mask & 0x01) ? 2 : 0;
 }
 
-static int scanGY80() {
-    int mask = 0;
-    if (i2cPing(0x68) || i2cPing(0x69)) mask |= 0x01;  // гиро
-    if (i2cPing(0x53)) mask |= 0x02;                   // аксель
-    if (i2cPing(0x1E)) mask |= 0x04;                   // магнит
-    if (i2cPing(0x77)) mask |= 0x08;                   // баро
-    return mask;
+static int scanBMI160() {
+    // Порядок как в imuLogger.begin: сначала 0x69, потом 0x68.
+    if (imuChipId(0x69) == 0xD1 || imuChipId(0x68) == 0xD1) return 0x03;
+    return 0;
 }
 
 // ====================================================================
@@ -329,7 +331,7 @@ static void setupHardware() {
     // Создание мьютексов ДО первого использования
     angleMutex = xSemaphoreCreateMutex();
     displayMutex = xSemaphoreCreateMutex();
-    i2cMutex = xSemaphoreCreateMutex();  // шина Wire: сервы + GY-80
+    i2cMutex = xSemaphoreCreateMutex();  // шина Wire: сервы + BMI160
 
     // Инициализация PCA9685
     servoCtrl.init();
@@ -346,21 +348,21 @@ static void setupHardware() {
         Serial.println("PCA9685: NOT FOUND (debug mode)");
     }
 
-    // Поиск GY-80 (железо воткнуто или нет — драйвер позже, см. TODO).
-    // Кружок: зелёный = гиро+аксель, жёлтый = только гиро, красный = нет гиро.
-    gy80Mask = scanGY80();
+    // Поиск BMI160 (железо воткнуто или нет — драйвер позже, см. TODO).
+    // Кружок: зелёный = чип найден, красный = нет гиро.
+    bmi160Mask = scanBMI160();
     xSemaphoreTake(displayMutex, portMAX_DELAY);
-    sharedState.imuState = gy80State();
+    sharedState.imuState = bmi160State();
     xSemaphoreGive(displayMutex);
-    Serial.printf("GY-80: gyro=%c acc=%c mag=%c baro=%c\n",
-                  (gy80Mask & 0x01) ? '+' : '-',
-                  (gy80Mask & 0x02) ? '+' : '-',
-                  (gy80Mask & 0x04) ? '+' : '-',
-                  (gy80Mask & 0x08) ? '+' : '-');
+    Serial.printf("BMI160: gyro=%c acc=%c mag=%c baro=%c\n",
+                  (bmi160Mask & 0x01) ? '+' : '-',
+                  (bmi160Mask & 0x02) ? '+' : '-',
+                  (bmi160Mask & 0x04) ? '+' : '-',
+                  (bmi160Mask & 0x08) ? '+' : '-');
 
     // IMU-логгер: драйвер по маске найденного + указатель на интерполятор
     // (запись идёт пока isMoving). Задача стартует после калибровки ниже.
-    imuLogger.begin(gy80Mask);
+    imuLogger.begin(bmi160Mask);
     imuLogger.setInterpolator(&interpolator);
 
     // Связывание интерполятора с зависимостями
@@ -519,7 +521,7 @@ static void setupHome() {
     memset(&sharedState, 0, sizeof(sharedState));
     sharedState.safetyEnabled = safety.isEnabled();
     sharedState.pcaReady = servoCtrl.isPcaAvailable();
-    sharedState.imuState = gy80State();
+    sharedState.imuState = bmi160State();
     sharedState.tcpPosition = fkSolver.getEndEffector(homeAngles.angles);
     for (int i = 0; i < 7; i++) {
         sharedState.servoAngles[i] = homeAngles.angles[i];

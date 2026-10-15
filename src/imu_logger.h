@@ -10,9 +10,8 @@
  */
 
 /*
- * imu_logger.h — опрос GY-80 (гиро L3G4200D + аксель ADXL345) и кольцевой
+ * imu_logger.h — опрос BMI160 (гиро+аксель, один чип) и кольцевой
  * журнал последнего движения для хоста.
- *
  * БЕЗ СТОРОННИХ ЛИБ: регистры читаем/пишем напрямую через Wire
  * (спарковская и pololu-либы под RTOS чудили — unbounded циклы,
  * повторный Wire.begin, залипающие статусы). Транспорт — 3 функции
@@ -41,11 +40,20 @@
 
 class MotionInterpolator;  // только указатель, полный тип — в .cpp
 
-// Масштабы (даташиты):
-//   ADXL345: range 16g + full-res => 3.902 мг/LSB
-//   L3G4200D: 250 dps => 8.75 mdps/LSB, ODR 200 Гц
-#define IMU_ACC_MG_LSB   3.902f
-#define IMU_GYRO_MDPS_LSB 8.75f
+// Масштабы (даташит BMI160):
+//   acc ±16g => 16000/32768 = 0.4883 мг/LSB
+//   gyro ±250 dps => 250000/32768 = 7.6294 mdps/LSB, ODR 200 Гц
+#define IMU_ACC_MG_LSB   0.4883f
+#define IMU_GYRO_MDPS_LSB 7.6294f
+
+// BMI160 (один чип, I2C 0x68/0x69 по SDO): CHIP_ID, питание, диапазоны.
+#define BMI160_CHIP_ID    0x00  // = 0xD1
+#define BMI160_GYRO_DATA  0x0C  // burst 12 Б: гиро XYZ + аксель XYZ, LE
+#define BMI160_ACC_CONF   0x40  // ODR/bwp: 0x29 = 200 Гц normal
+#define BMI160_ACC_RANGE  0x41  // 0x0C = ±16g
+#define BMI160_GYR_CONF   0x42  // ODR/bw: 0x29 = 200 Гц normal
+#define BMI160_GYR_RANGE  0x43  // 0x03 = ±250 dps
+#define BMI160_CMD        0x7E  // 0x11 acc normal, 0x15 gyro normal
 
 #define IMU_HZ        200
 #define IMU_PERIOD_MS (1000 / IMU_HZ)
@@ -64,7 +72,7 @@ class ImuLogger {
 public:
     ImuLogger();
 
-    // mask — биты scanGY80(): 0x01 гиро, 0x02 аксель. Wire уже поднят.
+    // mask — биты scanBMI160(): 0x01 гиро, 0x02 аксель. Wire уже поднят.
     // Отсутствующие чипы молча пропускаются.
     void begin(uint8_t mask);
     bool ready() const { return hasGyro_ && hasAcc_; }
@@ -104,9 +112,9 @@ private:
     void imuFuse(float gxDps, float gyDps, float axMg, float ayMg, float azMg);
 
     // --- Железо: только адреса, никаких объектов либ ---
-    uint8_t gyroAddr_ = 0;  // 0x68/0x69 (0 = нет гиро)
+    uint8_t imuAddr_ = 0;  // 0x68/0x69 (0 = нет чипа)
     bool hasGyro_ = false;
-    bool hasAcc_ = false;
+    bool hasAcc_ = false;  // один чип: всегда вместе с гиро
 
     float biasGx_ = 0, biasGy_ = 0, biasGz_ = 0;  // counts
     float tiltR_ = 0, tiltP_ = 0;                 // deg, фьюжн

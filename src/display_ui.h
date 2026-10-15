@@ -72,7 +72,7 @@ struct SharedState {
     bool        isCalibrating;    // Идёт калибровка IMU (дисплей CALIB)
     bool        safetyEnabled;    // Состояние безопасности
     bool        pcaReady;         // PCA9685 найден на I2C
-    uint8_t     imuState;         // GYR: 0=нет гиро (красный), 1=гиро без акселя (жёлтый), 2=гиро+аксель (зелёный)
+    uint8_t     imuState;         // GYR: 0=нет чипа (красный), иначе зелёный (гиро+аксель — один чип BMI160)
     bool        hasError;         // Есть ошибка
     char        lastError[64];    // Текст последней ошибки
     char        lastCommand[24];  // Последняя полученная команда

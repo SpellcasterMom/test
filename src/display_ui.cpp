@@ -315,8 +315,9 @@ void displayUpdate() {
     tft.print(state.safetyEnabled ? "ON " : "OFF");
 
     // --- Строка 2: Safe + PCA-кружок + GYR-кружок ---
-    // Кружок = наличие железа; GYR трёхцветный: зелёный = гиро+аксель,
-    // жёлтый = только гиро, красный = нет гиро. Текст не пишем.
+    // Кружок = наличие железа; GYR двухцветный (один чип BMI160:
+    // гиро+аксель всегда вместе): зелёный = чип найден, красный = нет гиро.
+    // Текст не пишем.
     // Перерисовка поверх тем же центром/радиусом полностью перекрывает
     // старый кружок — мерцания нет. Раскладка: Safe 4..100, PCA 110..170,
     // GYR 180..237 (кегль 2 = 12 px/символ, кружок r=4).
@@ -328,8 +329,7 @@ void displayUpdate() {
     tft.setCursor(180, sy);
     tft.setTextColor(COLOR_STATUS_LABEL, TFT_BLACK);
     tft.print("GYR:");
-    uint16_t gyrColor = (state.imuState >= 2) ? TFT_GREEN
-                      : (state.imuState == 1) ? TFT_YELLOW : TFT_RED;
+    uint16_t gyrColor = (state.imuState != 0) ? TFT_GREEN : TFT_RED;
     tft.fillCircle(233, sy + 8, 4, gyrColor);
 
     // --- Строка 3: последняя команда (как есть, до 20 символов) ---

@@ -17,7 +17,7 @@
 #include <cstring>
 
 /**
- * M119 — телеметрия IMU (GY-80): живые значения, пики, дамп кольца.
+  * M119 — телеметрия IMU (BMI160): живые значения, пики, дамп кольца.
  *   M119          — живые: наклон, последние counts, bias, пики, счётчик
  *   M119 S=1      — дамп кольца текстом (#IMU строки + OK в конце)
  *   M119 S=1 D=4  — дамп каждого 4-го сэмпла (быстрее)
@@ -26,7 +26,7 @@
  */
 void handleM119(GCodeCommand &cmd) {
     if (!imuLogger.hasGyro() && !imuLogger.hasAcc()) {
-        Serial.println("IMU: none (GY-80 not found)");
+        Serial.println("IMU: none (BMI160 not found)");
         Serial.println("OK");
         return;
     }
@@ -420,7 +420,8 @@ void handleHelp(GCodeCommand &cmd) {
     Serial.println("M104 P1=90 P2=0 ..            - Set servo angles directly");
     Serial.println("M105                          - Report servo angles");
     Serial.println("M108 S=50                     - Set gripper (percent 0-100)");
-    Serial.println("M119 [S=1] [D=4]               - IMU live / dump ring log");
+    Serial.println("M119 [S=1] [S=2] [D=4]          - IMU live / dump ring / live stream");
+    Serial.println("M450 S=1|S=0|S=2              - Batch stream: open/run/abort (no stops)");
     Serial.println("M114                          - Report position (FK)");
     Serial.println("M115 [S=1]                    - Kinematics diag (target/sols/actual)");
     Serial.println("M112                          - Emergency stop");
