@@ -30,7 +30,7 @@
 
 extern SemaphoreHandle_t i2cMutex;  // создаётся в main.cpp setup()
 
-ImuSample ImuLogger::rings_[2][IMU_LOG_N];
+ImuSample ImuLogger::ring_[IMU_LOG_N];
 
 ImuLogger::ImuLogger() {}
 
@@ -157,10 +157,10 @@ void ImuLogger::imuFuse(float gxDps, float gyDps,
     tiltP_ = A * (tiltP_ + gyDps * dt) + (1 - A) * pitchAcc;
 }
 
-void ImuLogger::push(int slot, const ImuSample &s) {
-    rings_[slot][slots_[slot].head % IMU_LOG_N] = s;
-    slots_[slot].head++;
-    if (slots_[slot].count < IMU_LOG_N) slots_[slot].count++;
+void ImuLogger::push(const ImuSample &s) {
+    ring_[head_ % IMU_LOG_N] = s;
+    head_++;
+    if (count_ < IMU_LOG_N) count_++;
 }
 
 // Переинит регистров после просадки/рыва шины (чип мог сброситься в дефолт).
@@ -189,39 +189,34 @@ void ImuLogger::recoverBus() {
 
 void ImuLogger::poll() {
     if (!hasGyro_ && !hasAcc_) return;
-    // Запись идёт пока движется интерполятор. Слот выбирается на старте
-    // сегмента по streamBusy(): пачка M450 — BATCH, остальное — SINGLE.
-    // Сброс слота — только если в ЕГО записи пауза > 1 с: вейпоинты одного
-    // движения идут вплотную и запись не рвут; чужой слот не трогаем.
+    // Запись идёт пока движется интерполятор. Сброс кольца — только если
+    // между движениями пауза > 1 с: вейпоинты одного G0 идут вплотную
+    // и запись не рвут.
     bool mv = interp_ && interp_->isMoving();
     uint32_t now = millis();
     if (mv && !wasMoving_) {
-        int kind = (interp_ && interp_->streamBusy()) ? IMU_SLOT_BATCH : IMU_SLOT_SINGLE;
-        activeSlot_ = kind;
-        ImuSlot &sl = slots_[kind];
-        sl.recording = true;
-        slots_[1 - kind].recording = false;
-        if (now - sl.lastEndMs > IMU_IDLE_GAP_MS) {
-            // Новая команда: сброс слота, первый сэмпл с меткой старта.
-            sl.head = 0;
-            sl.count = 0;
-            sl.marks = 0;
-            sl.peakAccG = 0;
-            sl.peakJerkGS = 0;
-            sl.prevAccValid = false;
+        // Вид сегмента защёлкиваем на старте: декартов план (G1/пачка/Q1)
+        // или заданные суставы (G0/M104/M108/G28). Дальше не меняется.
+        segComputed_ = interp_ && interp_->moveKind() == MotionInterpolator::MOVE_CART;
+        if (now - lastEndMs_ > IMU_IDLE_GAP_MS) {
+            // Новая команда: сброс кольца, первый сэмпл с меткой старта.
+            head_ = 0;
+            count_ = 0;
+            marks_ = 0;
+            peakAccG_ = 0;
+            peakJerkGS_ = 0;
+            prevAccValid_ = false;
             pendingMark_ = true;
             pendingIsStart_ = true;
         } else {
             // Хоп вейпоинта внутри одного G0 (пауза миллисекунды):
-            // слот не рвём, следующий сэмпл метим.
+            // кольцо не рвём, следующий сэмпл метим.
             pendingMark_ = true;
             pendingIsStart_ = false;
         }
     }
-    if (!mv && wasMoving_ && activeSlot_ >= 0) {
-        slots_[activeSlot_].lastEndMs = now;
-        slots_[activeSlot_].recording = false;
-    }
+    recording_ = mv;
+    if (!mv && wasMoving_) lastEndMs_ = now;
     wasMoving_ = mv;
     // Метки потока M450: следим за сиквенсом исполнителя (тот же Core 1 —
     // гонки нет, в худшем случае метка съедет на один сэмпл 5мс).
@@ -241,7 +236,7 @@ void ImuLogger::poll() {
         if (holding && !wasHolding_ && mv) pendingHold_ = true;
         wasHolding_ = holding;
     }
-    if (!mv || activeSlot_ < 0 || slots_[activeSlot_].hold) return;
+    if (!mv || hold_) return;
 
     if (!imuTake(50)) return;  // шина занята сервами — сэмпл пропускаем
     int16_t axyz[3] = {0, 0, 0};
@@ -259,20 +254,20 @@ void ImuLogger::poll() {
     }
     imuGive();
 
-    ImuSlot &sl = slots_[activeSlot_];
     ImuSample s;
     s.t = now;
     s.ax = axyz[0]; s.ay = axyz[1]; s.az = axyz[2];
     s.gx = gxyz[0]; s.gy = gxyz[1]; s.gz = gxyz[2];
     s.flags = 0;
+    if (segComputed_) s.flags |= 0x08;  // бит3: вычисленная декартова траектория
     if (pendingMark_) {
-        s.flags = pendingIsStart_ ? 0x01 : 0x02;
-        sl.marks++;
+        s.flags |= pendingIsStart_ ? 0x01 : 0x02;
+        marks_++;
         pendingMark_ = false;
     }
     if (pendingHold_) {
         s.flags |= 0x04;
-        sl.marks++;
+        marks_++;
         pendingHold_ = false;
     }
     last_[0] = s.ax; last_[1] = s.ay; last_[2] = s.az;
@@ -288,22 +283,22 @@ void ImuLogger::poll() {
     // Пики через квадраты: корень — только в момент нового пика (а не 200 Гц).
     // Эквивалентно: accG=sqrt(acc2)/1000, новый пик ⟺ acc2>(peak*1000)².
     float acc2 = axMg * axMg + ayMg * ayMg + azMg * azMg;
-    float peakAccMg = sl.peakAccG * 1000.0f;
-    if (acc2 > peakAccMg * peakAccMg) sl.peakAccG = sqrtf(acc2) / 1000.0f;
-    if (sl.prevAccValid) {
-        float dx = axMg - sl.prevAccMg[0];
-        float dy = ayMg - sl.prevAccMg[1];
-        float dz = azMg - sl.prevAccMg[2];
+    float peakAccMg = peakAccG_ * 1000.0f;
+    if (acc2 > peakAccMg * peakAccMg) peakAccG_ = sqrtf(acc2) / 1000.0f;
+    if (prevAccValid_) {
+        float dx = axMg - prevAccMg_[0];
+        float dy = ayMg - prevAccMg_[1];
+        float dz = azMg - prevAccMg_[2];
         float d2 = dx * dx + dy * dy + dz * dz;
         float dt = IMU_PERIOD_MS / 1000.0f;
-        float peakJerkMg = sl.peakJerkGS * 1000.0f * dt;
+        float peakJerkMg = peakJerkGS_ * 1000.0f * dt;
         if (d2 > peakJerkMg * peakJerkMg)
-            sl.peakJerkGS = sqrtf(d2) / 1000.0f / dt;
+            peakJerkGS_ = sqrtf(d2) / 1000.0f / dt;
     }
-    sl.prevAccMg[0] = axMg; sl.prevAccMg[1] = ayMg; sl.prevAccMg[2] = azMg;
-    sl.prevAccValid = true;
+    prevAccMg_[0] = axMg; prevAccMg_[1] = ayMg; prevAccMg_[2] = azMg;
+    prevAccValid_ = true;
 
-    push(activeSlot_, s);
+    push(s);
     // Живой режим M119 S=2: та же строка, что в дампе, — сразу в Serial.
     // Сюда доходят лишь при mv && !hold_ (гейт выше), т.е. пишем строго
     // при движении. Поток Serial делим с core0Task, printf атомарен.
@@ -352,47 +347,27 @@ void ImuLogger::getLast(int16_t out[6]) const {
     for (int i = 0; i < 6; i++) out[i] = last_[i];
 }
 
-void ImuLogger::getPeaks(int slot, float &accG, float &jerkGS) const {
-    accG = slots_[slot].peakAccG;
-    jerkGS = slots_[slot].peakJerkGS;
+void ImuLogger::getPeaks(float &accG, float &jerkGS) const {
+    accG = peakAccG_;
+    jerkGS = peakJerkGS_;
 }
 
-uint32_t ImuLogger::sampleCount(int slot) const { return slots_[slot].count; }
-uint32_t ImuLogger::markCount(int slot) const { return slots_[slot].marks; }
-bool ImuLogger::isRecording(int slot) const { return slots_[slot].recording; }
-void ImuLogger::setHold(int slot, bool h) { slots_[slot].hold = h; }
+uint32_t ImuLogger::sampleCount() const { return count_; }
+bool ImuLogger::isRecording() const { return recording_; }
+void ImuLogger::setHold(bool h) { hold_ = h; }
 
-int ImuLogger::lastActiveSlot() const {
-    // Пишется прямо сейчас — он и свежий.
-    if (slots_[IMU_SLOT_SINGLE].recording) return IMU_SLOT_SINGLE;
-    if (slots_[IMU_SLOT_BATCH].recording) return IMU_SLOT_BATCH;
-    // Иначе — у кого конец сегмента позже (сравнение через вычитание
-    // переживает оборот millis). Пустые слоты — в последнюю очередь.
-    bool e0 = slots_[IMU_SLOT_SINGLE].count == 0;
-    bool e1 = slots_[IMU_SLOT_BATCH].count == 0;
-    if (e0 && e1) return IMU_SLOT_SINGLE;
-    if (e0) return IMU_SLOT_BATCH;
-    if (e1) return IMU_SLOT_SINGLE;
-    uint32_t now = millis();
-    uint32_t age0 = now - slots_[IMU_SLOT_SINGLE].lastEndMs;
-    uint32_t age1 = now - slots_[IMU_SLOT_BATCH].lastEndMs;
-    return (age0 <= age1) ? IMU_SLOT_SINGLE : IMU_SLOT_BATCH;
-}
-
-void ImuLogger::dump(int slot, uint8_t decim) {
+void ImuLogger::dump(uint8_t decim) {
     if (decim < 1) decim = 1;
     Serial.printf("#SCALE acc_mg_lsb=%.3f gyro_mdps_lsb=%.2f\n",
                   IMU_ACC_MG_LSB, IMU_GYRO_MDPS_LSB);
     float bx, by, bz;
     getBiasDps(bx, by, bz);
     Serial.printf("#BIAS dps gx=%.2f gy=%.2f gz=%.2f\n", bx, by, bz);
-    Serial.printf("#SLOT %s\n", slot == IMU_SLOT_BATCH ? "batch" : "single");
-    uint32_t n = slots_[slot].count;
+    uint32_t n = count_;
     Serial.printf("#N=%lu\n", (unsigned long)n);
-    uint32_t head = slots_[slot].head;
-    uint32_t start = (head >= n) ? (head - n) : 0;
+    uint32_t start = (head_ >= n) ? (head_ - n) : 0;
     for (uint32_t i = 0; i < n; i += decim) {
-        const ImuSample &s = rings_[slot][(start + i) % IMU_LOG_N];
+        const ImuSample &s = ring_[(start + i) % IMU_LOG_N];
         Serial.printf("#IMU t=%lu ax=%d ay=%d az=%d gx=%d gy=%d gz=%d f=%u\n",
                       (unsigned long)s.t,
                       (int)s.ax, (int)s.ay, (int)s.az,

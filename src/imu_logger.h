@@ -21,17 +21,13 @@
  *   - комплементарный фьюжн наклона imuFuse() (замена на EKF — внутри,
  *     интерфейс не меняется);
  *   - задача Core 1, 200 Гц: burst-чтение, фьюжн, пики, запись в кольцо
- *     пока интерполятор в движении (опрос isMoving);
- *   - ДВА СЛОТА: SINGLE (G0/G1/M104 + цепочки Q1) и BATCH (дрен M450).
- *     Вид сегмента определяется на старте по streamBusy(); новый сегмент
- *     своего вида затирает только свой слот — одиночки и пачки друг друга
- *     не трогают, хоть час между ними. Сброс слота — пауза > 1 с в ЕГО
- *     записи (вейпоинты одного движения запись не рвут);
+ *     пока интерполятор в движении (опрос isMoving, сброс кольца если
+ *     между движениями пауза > 1 с — вейпоинты одного G0 не рвут запись);
  *   - метки точек потока: опрос следит за сиквенсом исполнителя
  *     (streamConsumed) — каждый поп метится битом 1, вход в hold — битом 2;
  *   - живой режим M119 S=2: печать сэмплов сразу (только при движении),
  *     гасится повторным S=2 или M112;
- *   - M119: живые значения + пики; M119 S=1 [D=n] [T=0/1]: дамп слота.
+ *   - M119: живые значения + пики; M119 S=1 [D=n]: дамп кольца текстом.
  *
  * В кольце — сырые counts (перевод в единицы на хосте по #SCALE-строке
  * дампа). Шина I2C общая с PCA9685 — все чтения под i2cMutex.
@@ -61,7 +57,7 @@ class MotionInterpolator;  // только указатель, полный ти
 
 #define IMU_HZ        200
 #define IMU_PERIOD_MS (1000 / IMU_HZ)
-#define IMU_LOG_N     2048          // сэмплов в слоте (~10 с на 200 Гц; слотов два, ~36 КБ статики каждый — больше DRAM не тянет)
+#define IMU_LOG_N     4096          // сэмплов в кольце (~20 с на 200 Гц: длинные потоки влезают; ~72 КБ статики)
 #define IMU_IDLE_GAP_MS 1000        // пауза «кончилось движение» для сброса кольца
 
 struct ImuSample {
@@ -69,25 +65,10 @@ struct ImuSample {
     int16_t  ax, ay, az;              // аксель, counts
     int16_t  gx, gy, gz;              // гиро, counts (bias НЕ вычтен — вычитает хост)
     uint16_t flags;                   // бит0 = старт записи, бит1 = вейпоинт,
-                                      // бит2 = вход в hold (голодание стрима)
+                                      // бит2 = вход в hold (голодание стрима),
+                                      // бит3 = вычисленная траектория (G1-декарт),
+                                      //   нет — заданные суставы (G0/M104/G28)
 };  // 18 байт (было 16 — метки того стоят)
-
-// Слоты: 0 = SINGLE (одиночки), 1 = BATCH (пачки M450). По 2048 сэмплов
-// (~10 с на 200 Гц, ~36 КБ статики каждый; 2×4096 в DRAM не влезло).
-#define IMU_SLOT_SINGLE 0
-#define IMU_SLOT_BATCH  1
-
-struct ImuSlot {
-    volatile uint32_t head = 0;    // куда пишем следующим
-    volatile uint32_t count = 0;   // сколько валидных (<= N)
-    volatile bool recording = false;  // идёт запись прямо сейчас
-    volatile bool hold = false;    // заморозка на время DUMP (рвёт tearing)
-    volatile uint32_t marks = 0;   // меток в текущей записи
-    float peakAccG = 0, peakJerkGS = 0;  // пики сегмента
-    float prevAccMg[3] = {0, 0, 0};  // для jerk (сброс на старте сегмента)
-    bool prevAccValid = false;
-    uint32_t lastEndMs = 0;        // конец последнего сегмента (свежесть)
-};
 
 class ImuLogger {
 public:
@@ -111,13 +92,12 @@ public:
     void getBiasDps(float &bx, float &by, float &bz) const;
     void getTilt(float &rollDeg, float &pitchDeg) const;
     void getLast(int16_t out[6]) const;
-    void getPeaks(int slot, float &accG, float &jerkGS) const;
-    uint32_t sampleCount(int slot) const;
-    uint32_t markCount(int slot) const;
-    bool isRecording(int slot) const;
-    int lastActiveSlot() const;  // свежий слот (при записи — пишущийся)
-    void setHold(int slot, bool h);  // заморозить слот на время DUMP
-    void dump(int slot, uint8_t decim);  // печать слота, старое → новое
+    void getPeaks(float &accG, float &jerkGS) const;
+    uint32_t sampleCount() const;
+    bool isRecording() const;
+    uint32_t markCount() const { return marks_; }
+    void setHold(bool h);  // заморозить запись на время DUMP (рвёт tearing)
+    void dump(uint8_t decim);  // печать кольца в Serial, старое → новое
     void setLive(bool on) { live_ = on; }  // живой режим M119 S=2 (тоггл/S2/M112)
     bool isLive() const { return live_; }
     uint32_t busFails() const { return busFails_; }
@@ -126,7 +106,7 @@ public:
 private:
     static void taskTrampoline(void *arg);
     void poll();                       // один тик 5 мс
-    void push(int slot, const ImuSample &s);
+    void push(const ImuSample &s);
     void reinitChips();                // переинит регистров после просадки
     void recoverBus();                 // Wire.end/begin + reinitChips
 
@@ -142,14 +122,21 @@ private:
     float tiltR_ = 0, tiltP_ = 0;                 // deg, фьюжн
     bool fuseInit_ = false;
     int16_t last_[6] = {0};
+    float peakAccG_ = 0, peakJerkGS_ = 0;
+    float prevAccMg_[3] = {0};
+    bool prevAccValid_ = false;
 
     MotionInterpolator *interp_ = nullptr;
     uint32_t busFails_ = 0;   // подряд идущие битые транзакции
     uint32_t recovers_ = 0;   // сколько раз поднимали шину
-    static ImuSample rings_[2][IMU_LOG_N];
-    ImuSlot slots_[2];        // [0] SINGLE, [1] BATCH
-    int activeSlot_ = -1;     // слот текущего сегмента (-1 = движения не было)
+    static ImuSample ring_[IMU_LOG_N];
+    volatile uint32_t head_ = 0;    // куда пишем следующим
+    volatile uint32_t count_ = 0;   // сколько валидных (<= N)
+    volatile bool recording_ = false;
+    volatile bool hold_ = false;
+    volatile uint32_t marks_ = 0;  // меток в текущей записи
     bool wasMoving_ = false;
+    bool segComputed_ = false;  // вид текущего сегмента: true = декартов план
     bool pendingMark_ = false;  // следующий сэмпл пометить хопом
     bool pendingIsStart_ = true;  // true = метка старта (бит0), false = вейпоинт (бит1)
     bool pendingHold_ = false;  // следующий сэмпл пометить входом в hold (бит2)
@@ -157,4 +144,5 @@ private:
     uint32_t lastSeq_ = 0;  // последний виденный сиквенс исполнителя
     bool seqInit_ = false;  // трекинг сиквенсов заведён
     bool wasHolding_ = false;  // прошлое состояние hold (фронт для метки)
+    uint32_t lastEndMs_ = 0;
 };

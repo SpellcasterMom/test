@@ -23,7 +23,7 @@ MotionInterpolator::MotionInterpolator()
       strategy(INTERP_AUTO), stepCallback(nullptr), moving(false),
       chainActive_(false), streamQ_(nullptr), execTask_(nullptr),
       batchOpen_(false), streamClosing_(false), streamAbortReq_(false),
-      streamState_(ST_IDLE), planSeq_(0), execSeq_(0), starved_(0),
+      streamState_(ST_IDLE), moveKind_(MOVE_JOINT), planSeq_(0), execSeq_(0), starved_(0),
       holdsMs_(0), maxStepMs_(0), depthMax_(0), dropSeq_(0),
       planTailValid_(false), chunkN_(0), execOk_(false) {
     memset(&currentAngles, 0, sizeof(currentAngles));
@@ -292,6 +292,7 @@ void MotionInterpolator::execLoop() {
         execSeq_ = wp.seq + 1;
         if (!havePrev) {
             qPrev = currentAngles;  // старт забега — с текущей позы
+            moveKind_ = MOVE_CART;  // точки пачки — декартов план
             havePrev = true;
         }
         streamState_ = ST_RUNNING;
@@ -434,6 +435,7 @@ bool MotionInterpolator::moveTo(const JointAngles &target, float feedrate) {
     }
 
     moving = true;
+    moveKind_ = MOVE_JOINT;  // прямые углы (G0/M104/M108/G28)
 
     bool result = false;
     switch (strategy) {
@@ -929,6 +931,7 @@ static float chainEase(float t, float rIn, float rOut, float V) {
 bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate, bool blendOut) {
     if (!servoCtrl || !ikSolver || !fkSolver) return false;
     moving = true;
+    moveKind_ = MOVE_CART;  // декартов план (G1, цепочки Q1)
 
     // Цепочка блендинга: вход — флаг от прошлого G1(Q1), выход — флаг Q1 этого.
     // Любой отказ ниже оставляет флаг сброшенным (следующий G1 стартует с останова).

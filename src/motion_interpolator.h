@@ -163,6 +163,14 @@ public:
         ST_HOLDING,  // голодание: стоим, ждём докачки
     };
 
+    /** Вид текущего движения (для метки IMU: вычисленная декартова
+     *  траектория vs заданные суставы). Ставит тот, кто начинает движение:
+     *  moveToPose и дрен потока — CART; moveTo (G0/M104/M108/G28) — JOINT. */
+    enum MoveKind : uint8_t {
+        MOVE_JOINT,  // прямые углы (задано)
+        MOVE_CART,   // декартов план (вычислено)
+    };
+
     /** Слот кольца: спланированная нога (позиции + длительность). */
     struct StreamWp {
         JointAngles q;    // articular-цель ноги
@@ -193,6 +201,9 @@ public:
     bool streamBusy() const {
         return streamState_ == ST_RUNNING || streamState_ == ST_HOLDING;
     }
+
+    /** Вид текущего движения (для метки IMU f.3). */
+    MoveKind moveKind() const { return moveKind_; }
 
     /** Последняя спланированная точка (continuity следующей).
      * @return false если в текущем потоке ещё ничего нет. */
@@ -304,6 +315,7 @@ private:
     volatile bool streamClosing_; // S0: докачать, встать, закрыть
     volatile bool streamAbortReq_;  // stop()/ISR: сбросить при первой возможности
     volatile StreamState streamState_;
+    volatile MoveKind moveKind_;  // вид текущего движения (см. выше)
     volatile uint32_t planSeq_;   // следующий сиквенс планировщика
     volatile uint32_t execSeq_;   // следующий сиквенс исполнителя (=потреблено)
     volatile uint32_t starved_;   // счётчик голоданий
