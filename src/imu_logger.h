@@ -10,7 +10,7 @@
  */
 
 /*
- * imu_logger.h — опрос GY-80 (гиро L3G4200D + аксель ADXL345) и кольцевой
+ * imu_logger.h — опрос BMI160 (гиро+аксель, один чип) и кольцевой
  * журнал последнего движения для хоста.
  *
  * БЕЗ СТОРОННИХ ЛИБ: регистры читаем/пишем напрямую через Wire
@@ -41,7 +41,8 @@
 
 class MotionInterpolator;  // только указатель, полный тип — в .cpp
 
-// Масштабы (даташиты):
+// Масштабы (даташиты; TODO(bmi160): веса LSB под диапазоны BMI160,
+// пока значения GY-80):
 //   ADXL345: range 16g + full-res => 3.902 мг/LSB
 //   L3G4200D: 250 dps => 8.75 mdps/LSB, ODR 200 Гц
 #define IMU_ACC_MG_LSB   3.902f
@@ -64,7 +65,7 @@ class ImuLogger {
 public:
     ImuLogger();
 
-    // mask — биты scanGY80(): 0x01 гиро, 0x02 аксель. Wire уже поднят.
+    // mask — биты scanBMI160(): 0x01 гиро, 0x02 аксель. Wire уже поднят.
     // Отсутствующие чипы молча пропускаются.
     void begin(uint8_t mask);
     bool ready() const { return hasGyro_ && hasAcc_; }

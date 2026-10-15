@@ -90,7 +90,7 @@ def diag(full: bool = False) -> str:
 
 @mcp.tool()
 def imu(dump: bool = False, decimate: int = 0) -> str:
-    """IMU GY-80: живьё (M119) или дамп кольца (dump=true, decimate=N)."""
+    """IMU BMI160: живьё (M119) или дамп кольца (dump=true, decimate=N)."""
     return run(commands.build_m119(dump, decimate), timeout=45.0)
 
 
