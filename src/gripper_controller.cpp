@@ -62,7 +62,7 @@ void GripperController::setPosition(float percent) {
     currentPosition = constrain(percent, 0.0f, 100.0f);
 
     if (servoCtrl) {
-        servoCtrl->setAngle(gripperServo, currentPosition);
+        servoCtrl->setAngle(gripperServo, gripperPctToAngle(currentPosition));
     }
 }
 

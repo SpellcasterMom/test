@@ -23,7 +23,7 @@
  *
  * Движение идёт через MotionInterpolator::moveTo: ease-in-out, лимиты
  * угловых скоростей, зажим в лимиты серв, safety. Шаг: 1°/детент для
- * P1–P6, 2%/детент для P7 (захват 0–100%).
+ * P1–P6, 2°/детент для P7 (захват 7–38°).
  *
  * Потоки: ISR только копит детенты/стоп-флаг; движение — из задачи
  * (pendantTask в main.cpp, опрос каждые 20 мс). В ISR ни Serial, ни delay.
@@ -58,7 +58,7 @@
 #define JOG_STEP_DEG 1.0f       // градусов на детент (P1–P6)
 #endif
 #ifndef JOG_GRIP_STEP
-#define JOG_GRIP_STEP 2.0f      // процентов на детент (P7, 0–100%)
+#define JOG_GRIP_STEP 2.0f      // градусов на детент (P7, 7–38°)
 #endif
 #ifndef JOG_COUNTS_PER_DETENT
 #define JOG_COUNTS_PER_DETENT 2 // фронтов Gray-кода на детент EC11

@@ -319,7 +319,7 @@ bool IKSolver::solve(const Pose &target, JointAngles &result) {
     result.angles[3] = clampAngle(3, q4);  // запястье (pitch)
     result.angles[4] = clampAngle(4, q5);  // запястье (yaw)
     result.angles[5] = clampAngle(5, q6);  // запястье (roll)
-    result.angles[6] = 0;                  // захват управляется отдельно
+    result.angles[6] = GRIP_CLOSED_DEG;  // захват управляется отдельно
 
     // ЭТАП 3: доводка по полной цепочке — матричное ядро напрямую
     // (обёртка refineSolution пересчитала бы eulerToMatrix ещё раз).

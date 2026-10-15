@@ -60,7 +60,7 @@ void ServoController::init() {
  *   - homeOffset          — сдвиг math → servo (135° / 90° / 0°)
  *
  * minAngle/maxAngle — в МАТЕМАТИЧЕСКОМ диапазоне (-135..+135, -90..+90,
- * 0..100). homeOffset прибавляется внутри computePulseUs()
+ * 7..38). homeOffset прибавляется внутри computePulseUs()
  * перед конвертацией в PWM.
  */
 void ServoController::setConfig(const ServoConfig configs[7]) {
