@@ -64,10 +64,8 @@ void IRAM_ATTR JogPendant::isrEnc() {
 void IRAM_ATTR JogPendant::isrEstop() {
     JogPendant *p = instance_;
     if (!p || !p->interp_) return;
-    p->interp_->stop();      // стоп движения
-    servoCtrl.disable();     // сервы от питания (как M112)
-    imuLogger.setLive(false);// живой поток IMU тоже гасим
-    p->estopISR_ = true;
+    p->interp_->stop();      // стоп движения (быстро, без I2C)
+    p->estopISR_ = true;     // остальное — в poll()
 }
 
 void JogPendant::poll() {
@@ -78,6 +76,8 @@ void JogPendant::poll() {
         estopISR_ = false;
         estopHit_ = true;
         acc_ = 0;   // набранное за время стопа сбрасываем
+        servoCtrl.disable();    // сервы от питания (как M112)
+        imuLogger.setLive(false);// живой поток IMU тоже гасим
         Serial.println("OK: Emergency stop");
     }
     if (!JOG_ENABLED) return;
