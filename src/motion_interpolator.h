@@ -291,6 +291,13 @@ public:
      * команд тоже фиксируют «не ехали» (отказ до вызова интерполятора). */
     void setMark(const char *mode, const char *note);
 
+    /**
+     * @brief Оценка длительности ноги пакета (мс) по joint-дельтам
+     * и потолкам maxAngularSpeed (включая гриппер). Та же формула, что
+     * оценка времени в moveToPose. Только для темпа, не для точности.
+     */
+    float legMs(const JointAngles &from, const JointAngles &to, float feedrate);
+
 private:
     ServoController      *servoCtrl;   // Контроллер сервоприводов
     BacklashCompensator  *backlash;    // Компенсатор люфта
@@ -351,13 +358,6 @@ private:
      * При неудаче (нарушение безопасности) переключается на последовательную.
      */
     bool interpolateAuto(const JointAngles &target, float feedrate);
-
-    /**
-     * @brief Оценка длительности ноги пакета (мс) по joint-дельтам
-     * и потолкам maxAngularSpeed (включая гриппер). Та же формула, что
-     * оценка времени в moveToPose. Только для темпа, не для точности.
-     */
-    float legMs(const JointAngles &from, const JointAngles &to, float feedrate);
 
     /**
      * @brief Функция сглаживания ease-in-out (квадратичная).
