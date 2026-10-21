@@ -353,6 +353,13 @@ private:
     bool interpolateAuto(const JointAngles &target, float feedrate);
 
     /**
+     * @brief Оценка длительности ноги пакета (мс) по joint-дельтам
+     * и потолкам maxAngularSpeed (включая гриппер). Та же формула, что
+     * оценка времени в moveToPose. Только для темпа, не для точности.
+     */
+    float legMs(const JointAngles &from, const JointAngles &to, float feedrate);
+
+    /**
      * @brief Функция сглаживания ease-in-out (квадратичная).
      * Плавно ускоряет и замедляет движение.
      * @param t Время от 0.0 до 1.0
@@ -375,13 +382,6 @@ private:
      * Люфт + setAngles + callback, интерполировать нечего.
      */
     void outputStep(const JointAngles &q);
-
-    /**
-     * @brief Оценка длительности ноги пакета (мс) по joint-дельтам
-     * и потолкам maxAngularSpeed (включая гриппер). Та же формула, что
-     * оценка времени в moveToPose. Только для темпа, не для точности.
-     */
-    float legMs(const JointAngles &from, const JointAngles &to, float feedrate);
 
     /** Трамплина задачи исполнителя (FreeRTOS хочет свободную функцию). */
     static void execTrampoline(void *arg);
