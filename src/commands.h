@@ -197,14 +197,16 @@ const CommandDef COMMANDS[] = {
     },
     {
         .name = "M108",
-        .description = "Set gripper: M108 S=50 (percent 0-100)",
+        .description = "Set gripper: M108 S=50 (percent 0-100) [T=sec]",
         // Параметры M108:
         //   S — открытие захвата в процентах (0=закрыт, 100=открыт)
-        //       Пример: M108 S=75 — открыть захват на 75%
+        //   T — время движения в секундах (0.5–3.0), опционально
+        //       Пример: M108 S=75 T=2 — открыть на 75% за 2 секунды
         .params = {
             {'S', PARAM_FLOAT, -1, 50.0},
+            {'T', PARAM_FLOAT, 0, 0.0},
         },
-        .paramCount = 1,
+        .paramCount = 2,
         .handler = handleM108,
     },
     {

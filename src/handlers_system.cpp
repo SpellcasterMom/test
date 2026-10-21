@@ -453,7 +453,7 @@ void handleHelp(GCodeCommand &cmd) {
     Serial.println("G91                           - Relative mode");
     Serial.println("M104 P1=90 P2=0 ..            - Set servo angles directly");
     Serial.println("M105                          - Report servo angles");
-    Serial.println("M108 S=50                     - Set gripper (percent 0-100)");
+    Serial.println("M108 S=50 [T=sec]      - Set gripper (percent 0-100), T=0.5-3.0 s");
     Serial.println("M119 [S=1] [S=2] [D=4]          - IMU live / dump ring / live stream");
     Serial.println("M450 S=1|S=0|S=2              - Batch stream: open/run/abort (no stops)");
     Serial.println("M114                          - Report position (FK)");

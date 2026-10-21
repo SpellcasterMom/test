@@ -728,7 +728,8 @@ void handleM104(GCodeCommand &cmd) {
 
 /**
  * M108 — захват в процентах: M108 S=50 (0=закрыт, 100=открыт).
- * P7 живёт в градусах сервы (закрыт 7°, открыт 38°): процент маппится.
+ * P7 живёт в градусах сервы (закрыт 7°, открыт 20°): процент маппится.
+ * Опциональный T — время движения в секундах (0.5–3.0).
  * Едет только сустав 6 через тот же interpolator, что M104.
  */
 void handleM108(GCodeCommand &cmd) {
@@ -750,9 +751,32 @@ void handleM108(GCodeCommand &cmd) {
     float pct = cmd.params[SI];
     if (pct < 0.0f) pct = 0.0f;
     if (pct > 100.0f) pct = 100.0f;
+
+    // Длительность движения, опционально: M108 S=50 T=2 (секунды)
+    float seconds = 0.0f;
+    const int TI = 'T' - 'A';
+    if (cmd.hasParam[TI]) {
+        seconds = cmd.params[TI];
+        if (seconds < 0.5f) seconds = 0.5f;
+        if (seconds > 3.0f) seconds = 3.0f;
+    }
+
     JointAngles target = currentAngles;
     target.angles[6] = gripperPctToAngle(pct);
-    float feedrate = cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE;
+
+    float feedrate = DEFAULT_FEEDRATE;
+    if (seconds > 0.0f) {
+        // Время full-speed по максимуму серв (мс), потом масштабируем до целевых секунд
+        float fullMs = interpolator.legMs(currentAngles, target, 100.0f);
+        if (fullMs > 0.0f) {
+            feedrate = 100.0f * fullMs / (seconds * 1000.0f);
+            if (feedrate < 1.0f) feedrate = 1.0f;
+            if (feedrate > 100.0f) feedrate = 100.0f;
+        }
+    } else if (cmd.hasFeedrate) {
+        feedrate = cmd.feedrate;
+    }
+
     interpolator.setCurrentAngles(currentAngles);
     if (interpolator.moveTo(target, feedrate)) {
         xSemaphoreTake(angleMutex, portMAX_DELAY);
@@ -772,7 +796,9 @@ void handleM108(GCodeCommand &cmd) {
         diagEvalSol(diagLast.sols[0], target, cmd.pose);
         diagLast.solCount = 1;
         diagLast.chosen = 0;
-        Serial.printf("OK: Gripper %.0f%%\n", pct);
+        Serial.printf("OK: Gripper %.0f%%", pct);
+        if (seconds > 0.0f) Serial.printf(" t=%.1fs", seconds);
+        Serial.println();
     } else {
         strncpy(diagLast.failReason, "Move failed (interpolator/safety)",
                 sizeof(diagLast.failReason) - 1);
@@ -780,6 +806,6 @@ void handleM108(GCodeCommand &cmd) {
         sharedState.hasError = true;
         snprintf(sharedState.lastError, sizeof(sharedState.lastError), "M108 move failed");
         xSemaphoreGive(displayMutex);
-        Serial.println("ERROR: M108 move failed (safety/interpolator)");
+        Serial.println("ERROR: M108 move failed (interpolator/safety)");
     }
 }

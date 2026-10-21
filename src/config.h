@@ -273,7 +273,7 @@ const ServoConfig DEFAULT_SERVO_CONFIG[7] = {
 // Ход захвата, градусы сервы (замер владельца 15.10.2026).
 // Проценты M108/G0-J переводятся сюда хелперами ниже (интерфейс остался 0..100).
 #define GRIP_CLOSED_DEG 7.0f    // закрыт
-#define GRIP_OPEN_DEG 38.0f     // открыт
+#define GRIP_OPEN_DEG 20.0f     // открыт (20°)
 inline float gripperPctToAngle(float pct) {
     if (pct < 0.0f) pct = 0.0f;
     if (pct > 100.0f) pct = 100.0f;
