@@ -159,7 +159,7 @@ void handleG0(GCodeCommand &cmd) {
             // отбраковки точных, но опасных). Отказываем вместо прыжка в мусор.
             // Рабочие ходы идут с dPos<1мм/dOri в единицы градусов (двойник+железо).
             const float IK_POS_TOL = 10.0f;   // мм
-            const float IK_ORI_TOL = 15.0f;   // град
+            const float IK_ORI_TOL = 20.0f;   // grados — запас на неточность DH железа vs модель
             if (foundSafe &&
                 (diagLast.sols[best].dPos > IK_POS_TOL ||
                  diagLast.sols[best].dOri > IK_ORI_TOL)) {
@@ -379,7 +379,7 @@ void handleG1(GCodeCommand &cmd) {
     // движения пост-гейтом ниже. Диагностика сидов в цепочке не пишется
     // (останова нет — мерить нечего).
     const float IK_POS_TOL = 10.0f;
-    const float IK_ORI_TOL = 15.0f;
+    const float IK_ORI_TOL = 20.0f;
     bool chainIn = interpolator.chainActive();
     bool blendOut = cmd.hasParam['Q' - 'A'] && cmd.params['Q' - 'A'] != 0.0f;
     bool inBatch = interpolator.batchOpen();
