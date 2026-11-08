@@ -63,8 +63,17 @@ void diagEvalSol(DiagSol &s, const JointAngles &q, const Pose &target) {
         s.safe = true;
         s.safeErr[0] = '\0';
     } else if (safety.checkAllLinks(qq)) {
-        s.safe = true;
-        s.safeErr[0] = '\0';
+        // Проверка самопересечения звеньев (кисть/предплечье vs плечо/локоть).
+        // Решение с dist < minLinkDistance считается небезопасным и не
+        // участвует в выборе min-residual.
+        if (!safety.checkLinkDistances(qq)) {
+            s.safe = false;
+            strncpy(s.safeErr, safety.getLastError().c_str(), sizeof(s.safeErr) - 1);
+            s.safeErr[sizeof(s.safeErr) - 1] = '\0';
+        } else {
+            s.safe = true;
+            s.safeErr[0] = '\0';
+        }
     } else {
         s.safe = false;
         strncpy(s.safeErr, safety.getLastError().c_str(), sizeof(s.safeErr) - 1);

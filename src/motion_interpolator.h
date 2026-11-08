@@ -291,6 +291,13 @@ public:
      * команд тоже фиксируют «не ехали» (отказ до вызова интерполятора). */
     void setMark(const char *mode, const char *note);
 
+    /**
+     * @brief Оценка длительности ноги пакета (мс) по joint-дельтам
+     * и потолкам maxAngularSpeed (включая гриппер). Та же формула, что
+     * оценка времени в moveToPose. Только для темпа, не для точности.
+     */
+    float legMs(const JointAngles &from, const JointAngles &to, float feedrate);
+
 private:
     ServoController      *servoCtrl;   // Контроллер сервоприводов
     BacklashCompensator  *backlash;    // Компенсатор люфта
@@ -375,13 +382,6 @@ private:
      * Люфт + setAngles + callback, интерполировать нечего.
      */
     void outputStep(const JointAngles &q);
-
-    /**
-     * @brief Оценка длительности ноги пакета (мс) по joint-дельтам
-     * и потолкам maxAngularSpeed (включая гриппер). Та же формула, что
-     * оценка времени в moveToPose. Только для темпа, не для точности.
-     */
-    float legMs(const JointAngles &from, const JointAngles &to, float feedrate);
 
     /** Трамплина задачи исполнителя (FreeRTOS хочет свободную функцию). */
     static void execTrampoline(void *arg);

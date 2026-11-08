@@ -57,7 +57,7 @@ void ServoController::init() {
  *   - correctionFactor    — корректирующий множитель (100.0 = без коррекции)
  *   - isInverted          — флаг инвертирования направления вращения
  *   - backlash            — величина люфта в градусах
- *   - homeOffset          — сдвиг math → servo (135° / 90° / 0°)
+ *   - homeOffset          — сдвиг math → servo (135° для P1–P6, 0° для gripper)
  *
  * minAngle/maxAngle — в МАТЕМАТИЧЕСКОМ диапазоне (-135..+135, -90..+90,
  * 7..38). homeOffset прибавляется внутри computePulseUs()
@@ -123,8 +123,7 @@ uint16_t ServoController::computePulseUs(int servoId, float qmath) {
  * 0. HOME OFFSET (math → servo):
  *    q_math — математический угол из IK (0 = «нулевая поза»).
  *    servoAngle = q_math + homeOffset — физический угол сервы.
- *    P1–P3: homeOffset = 135° (math 0 → серва 135°)
- *    P4–P6: homeOffset =  90° (math 0 → серва  90°)
+ *    P1–P6: homeOffset = 135° (math 0 → серва 135°)
  *    P7:    homeOffset =   0°
  *
  * 1. ВАЛИДАЦИЯ: проверяем, что servoId в диапазоне [0, 6],
