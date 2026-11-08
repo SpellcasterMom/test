@@ -196,20 +196,20 @@ float SafetyChecker::distSegmentSegment2(const Vec3 &p0, const Vec3 &p1,
     float a = d1.x * d1.x + d1.y * d1.y + d1.z * d1.z;
     float e = d2.x * d2.x + d2.y * d2.y + d2.z * d2.z;
     float f = d2.x * r.x + d2.y * r.y + d2.z * r.z;
-    const float EPS = 1e-6f;
+    const float kEps = 1e-6f;
     float s, t;
-    if (a < EPS) {
+    if (a < kEps) {
         s = 0.0f;
         t = (e < EPS) ? 0.0f : constrain(f / e, 0.0f, 1.0f);
     } else {
         float c = d1.x * r.x + d1.y * r.y + d1.z * r.z;
-        if (e < EPS) {
+            if (e < kEps) {
             t = 0.0f;
             s = constrain(-c / a, 0.0f, 1.0f);
         } else {
             float b = d1.x * d2.x + d1.y * d2.y + d1.z * d2.z;
             float denom = a * e - b * b;
-            if (denom < EPS) {
+            if (denom < 1e-6f) {
                 s = 0.0f;
                 t = constrain(f / e, 0.0f, 1.0f);
             } else {
