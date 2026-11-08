@@ -108,6 +108,9 @@ void MotionInterpolator::execTrampoline(void *arg) {
 // Доля шагов на разгон/торможение (блендинг и ноги потока).
 // Объявлена здесь — выше обоих пользователей (batchProfFor, moveToPose).
 static const float CHAIN_RAMP_FRAC = 0.15f;
+// Минимум времени на ногу в потоке, чтобы у каждой ноги было достаточно
+// шагов для плавного easeInOut/круиза без рывков между waypoints.
+static const float MIN_LEG_MS = 300.0f;
 
 int MotionInterpolator::streamDepth() const {
     if (!streamQ_) return 0;
@@ -256,6 +259,15 @@ void MotionInterpolator::execLoop() {
             continue;
         }
         StreamWp wp;
+        // Не начинаем дренировать до барьера M450 S0 (streamClosing_).
+        // Иначе исполнитель обгоняет хост: hold-and-resume между waypoints,
+        // starved растёт, движение рывками. Сначала накапливаем все точки,
+        // потом дренируем сплошняком.
+        if (batchOpen_ && !streamClosing_) {
+            streamState_ = ST_FILLING;
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
         if (!streamQ_ ||
             xQueueReceive(streamQ_, &wp, pdMS_TO_TICKS(5)) != pdTRUE) {
             if (streamClosing_) {
@@ -299,7 +311,8 @@ void MotionInterpolator::execLoop() {
         if (!moving) moving = true;
         JointAngles legFrom = qPrev;  // C0: нога стартует ровно там, где встала прошлая
         int steps = (int)(wp.segMs / STEP_INTERVAL_MS);
-        if (steps < 1) steps = 1;
+        int minSteps = (int)(MIN_LEG_MS / STEP_INTERVAL_MS);  // минимум для плавности
+        if (steps < minSteps) steps = minSteps;
         // Последняя нога (закрылись и кольцо пусто) — тормозим на ней же.
         // Иначе S0, пришедший посреди неё, давал бы квант-стоп в конце.
         bool lastLeg = streamClosing_ && streamQ_ &&
