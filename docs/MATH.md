@@ -585,7 +585,7 @@ $$
 **Порог годности** (ворота движения):
 
 $$
-dPos \le 10\ \text{мм} \quad \text{и} \quad dOri \le 15°.
+dPos \le 10\ \text{мм} \quad \text{и} \quad dOri \le 20°.
 \tag{18}
 $$
 
