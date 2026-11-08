@@ -243,8 +243,8 @@ void handleG0(GCodeCommand &cmd) {
 
     // Проверка безопасности
     if (safety.isEnabled()) {
-        if (!safety.checkAllLinks(target.angles) ||
-            !safety.checkLinkDistances(target.angles)) {
+        // Жёсткие проверки (Z, рабочая зона, радиус, запретные зоны) — блокируют.
+        if (!safety.checkAllLinks(target.angles)) {
             strncpy(diagLast.failReason, safety.getLastError().c_str(),
                     sizeof(diagLast.failReason) - 1);
             xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
@@ -254,6 +254,11 @@ void handleG0(GCodeCommand &cmd) {
             Serial.print("ERROR: Safety violation: ");
             Serial.println(safety.getLastError());
             return;
+        }
+        // Самопересечение звеньев — предупреждение, не блокируем движение.
+        if (!safety.checkLinkDistances(target.angles)) {
+            Serial.print("WARN: Self-collision risk: ");
+            Serial.println(safety.getLastError());
         }
     }
 
