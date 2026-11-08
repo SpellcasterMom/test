@@ -33,8 +33,8 @@
  *
  *   servoAngle = q_math + homeOffset
  *
- * При q_math = 0 физически серва стоит в homeOffset (135° для P1–P3,
- * 90° для P4–P6, 0° для gripper). Это позволяет IK/FK/safety работать
+ * При q_math = 0 физически серва стоит в homeOffset (135° для P1–P6,
+ * 0° для gripper). Это позволяет IK/FK/safety работать
  * в «чистой» математике (0 = нейтральная поза), а физическое железо
  * получать корректные углы через ServoController::setAngle().
  *
