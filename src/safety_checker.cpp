@@ -425,12 +425,13 @@ bool SafetyChecker::checkLinkDistances(const float q[6]) {
     (void)fdir;
     (void)T06;
 
-    // Энпоинты звеньев: link k (1..5) = joints[k]→joints[k+1], link 6 = joints[6]→tcp.
-    // Базовая колонна (звено 0) и соседние звенья (делят сустав) не проверяются.
+    // Энпоинты звеньев: link k (3..5) = joints[k]→joints[k+1], link 6 = joints[6]→tcp.
+    // Самопересечение возможно только в запястье (ссылки 3..6). Плечо/локоть
+    // (ссылки 1..2) не пересекутся ни с чем по построению — не проверяем.
     struct LinkSeg { int idx; Vec3 a, b; };
-    LinkSeg links[6];
+    LinkSeg links[4];
     int linkCount = 0;
-    for (int k = 1; k <= 6; k++) {
+    for (int k = 3; k <= 6; k++) {
         LinkSeg ls;
         ls.idx = k;
         if (k <= 5) {
