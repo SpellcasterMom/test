@@ -257,7 +257,7 @@ void MotionInterpolator::execLoop() {
         }
         StreamWp wp;
         if (!streamQ_ ||
-            xQueueReceive(streamQ_, &wp, pdMS_TO_TICKS(50)) != pdTRUE) {
+            xQueueReceive(streamQ_, &wp, pdMS_TO_TICKS(5)) != pdTRUE) {
             if (streamClosing_) {
                 // Докачали: встаём сразу (рампа уже была на последней ноге —
                 // см. lastLeg ниже; сюда попадаем только если S0 пришло
@@ -317,18 +317,6 @@ void MotionInterpolator::execLoop() {
             for (int k = 0; k < 7; k++) {
                 qq.angles[k] = legFrom.angles[k] +
                     (wp.q.angles[k] - legFrom.angles[k]) * e;
-            }
-            // Safety каждой точки (дешёвый; String-причину не трогаем —
-            // она у другого ядра: только номер ноги).
-            if (safety && safety->isEnabled() && !safety->checkAllLinks(qq.angles)) {
-                char note[64];
-                snprintf(note, sizeof(note), "stream leg seq=%lu refused",
-                         (unsigned long)wp.seq);
-                setMark("STREAM", note);
-                moving = false;
-                currentAngles = qPrev;
-                legOk = false;
-                break;
             }
             outputStep(qq);
             qPrev = qq;
@@ -1080,6 +1068,7 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate, bool
     float grip0 = currentAngles.angles[6];
     float grip1 = targetPose.gripper;
     JointAngles qPrev = currentAngles;
+    TickType_t slot = xTaskGetTickCount();
 
     // Замер темпа счёта (B3): max/avg мс на шаг — в финальную метку.
     uint32_t maxSpent = 0;
@@ -1188,9 +1177,7 @@ bool MotionInterpolator::moveToPose(const Pose &targetPose, float feedrate, bool
             uint32_t spent = millis() - stepT0;
             if (spent > maxSpent) maxSpent = spent;
             sumSpent += spent;
-            if (spent < (uint32_t)STEP_INTERVAL_MS) {
-                delay((unsigned long)(STEP_INTERVAL_MS - spent));
-            }
+            vTaskDelayUntil(&slot, pdMS_TO_TICKS((uint32_t)STEP_INTERVAL_MS));
         }
     }
 
