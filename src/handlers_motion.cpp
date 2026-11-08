@@ -243,7 +243,8 @@ void handleG0(GCodeCommand &cmd) {
 
     // Проверка безопасности
     if (safety.isEnabled()) {
-        if (!safety.checkAllLinks(target.angles)) {
+        if (!safety.checkAllLinks(target.angles) ||
+            !safety.checkLinkDistances(target.angles)) {
             strncpy(diagLast.failReason, safety.getLastError().c_str(),
                     sizeof(diagLast.failReason) - 1);
             xSemaphoreTake(displayMutex, pdMS_TO_TICKS(50));
@@ -690,6 +691,14 @@ void handleM104(GCodeCommand &cmd) {
         }
     }
     float feedrate = cmd.hasFeedrate ? cmd.feedrate : DEFAULT_FEEDRATE;
+
+    // Жёсткие проверки (Z, рабочая зона, радиус, запретные зоны) — внутри interpolator.
+    // Самопересечение в ручном режиме: предупреждаем, но НЕ блокируем.
+    if (safety.isEnabled() && !safety.checkLinkDistances(target.angles)) {
+        Serial.print("WARN: Self-collision risk: ");
+        Serial.println(safety.getLastError());
+    }
+
     interpolator.setCurrentAngles(currentAngles);
     if (interpolator.moveTo(target, feedrate)) {
         xSemaphoreTake(angleMutex, portMAX_DELAY);

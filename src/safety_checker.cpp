@@ -188,6 +188,49 @@ Vec3 SafetyChecker::sampleOnLink(const Vec3 &a, const Vec3 &b, float t) const {
     return a + (b - a) * t;
 }
 
+float SafetyChecker::distSegmentSegment2(const Vec3 &p0, const Vec3 &p1,
+                                         const Vec3 &q0, const Vec3 &q1) {
+    Vec3 d1 = p1 - p0;
+    Vec3 d2 = q1 - q0;
+    Vec3 r = p0 - q0;
+    float a = d1.x * d1.x + d1.y * d1.y + d1.z * d1.z;
+    float e = d2.x * d2.x + d2.y * d2.y + d2.z * d2.z;
+    float f = d2.x * r.x + d2.y * r.y + d2.z * r.z;
+    const float EPS = 1e-6f;
+    float s, t;
+    if (a < EPS) {
+        s = 0.0f;
+        t = (e < EPS) ? 0.0f : constrain(f / e, 0.0f, 1.0f);
+    } else {
+        float c = d1.x * r.x + d1.y * r.y + d1.z * r.z;
+        if (e < EPS) {
+            t = 0.0f;
+            s = constrain(-c / a, 0.0f, 1.0f);
+        } else {
+            float b = d1.x * d2.x + d1.y * d2.y + d1.z * d2.z;
+            float denom = a * e - b * b;
+            if (denom < EPS) {
+                s = 0.0f;
+                t = constrain(f / e, 0.0f, 1.0f);
+            } else {
+                s = constrain((b * f - c * e) / denom, 0.0f, 1.0f);
+                t = (b * s + f) / e;
+                if (t < 0.0f) {
+                    t = 0.0f;
+                    s = constrain(-c / a, 0.0f, 1.0f);
+                } else if (t > 1.0f) {
+                    t = 1.0f;
+                    s = constrain((b - c) / a, 0.0f, 1.0f);
+                }
+            }
+        }
+    }
+    Vec3 c1 = p0 + d1 * s;
+    Vec3 c2 = q0 + d2 * t;
+    Vec3 diff = c1 - c2;
+    return diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+}
+
 /**
  * @brief Проверка безопасности одного звена.
  *
@@ -364,6 +407,55 @@ bool SafetyChecker::checkAllLinks(const float q[6]) {
     // tcp уже из getPose выше — повторного FK нет.
     if (!checkLinkSafety(joints[6], tcp, 6)) {
         return false;
+    }
+
+    return true;
+}
+
+bool SafetyChecker::checkLinkDistances(const float q[6]) {
+    float minDist = linkSafety.minLinkDistance;
+    if (minDist <= 0.0f) return true;  // защита выключена
+
+    float minDist2 = minDist * minDist;
+
+    Vec3 joints[7];
+    Vec3 tcp, fdir;
+    Mat4 T06;
+    fkSolver.getPose(q, joints, tcp, fdir, T06);
+    (void)fdir;
+    (void)T06;
+
+    // Энпоинты звеньев: link k (1..5) = joints[k]→joints[k+1], link 6 = joints[6]→tcp.
+    // Базовая колонна (звено 0) и соседние звенья (делят сустав) не проверяются.
+    struct LinkSeg { int idx; Vec3 a, b; };
+    LinkSeg links[6];
+    int linkCount = 0;
+    for (int k = 1; k <= 6; k++) {
+        LinkSeg ls;
+        ls.idx = k;
+        if (k <= 5) {
+            ls.a = joints[k];
+            ls.b = joints[k + 1];
+        } else {
+            ls.a = joints[6];
+            ls.b = tcp;
+        }
+        links[linkCount++] = ls;
+    }
+
+    for (int i = 0; i < linkCount; i++) {
+        for (int j = i + 1; j < linkCount; j++) {
+            // Соседние звенья делят сустав (индексы подряд) — пропускаем.
+            if (links[j].idx == links[i].idx + 1) continue;
+            float d2 = distSegmentSegment2(links[i].a, links[i].b, links[j].a, links[j].b);
+            if (d2 < minDist2) {
+                float d = sqrt(d2);
+                lastError = "Self-collision: link " + String(links[i].idx) +
+                            " <-> link " + String(links[j].idx) +
+                            " dist=" + String(d, 1) + "mm < " + String(minDist, 1) + "mm";
+                return false;
+            }
+        }
     }
 
     return true;
