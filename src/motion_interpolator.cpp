@@ -235,7 +235,6 @@ void MotionInterpolator::execLoop() {
             streamClosing_ = false;
             batchOpen_ = false;
             havePrev = false;
-            rampNext = true;
             moving = false;
             setMark("STREAM", "aborted");
             vTaskDelay(pdMS_TO_TICKS(20));
@@ -260,7 +259,6 @@ void MotionInterpolator::execLoop() {
                 streamClosing_ = false;
                 streamState_ = ST_IDLE;
                 havePrev = false;
-                rampNext = true;
                 moving = false;
                 execOk_ = true;
                 setMark("STREAM", "drained");
@@ -275,7 +273,6 @@ void MotionInterpolator::execLoop() {
                     setMark("STREAM", "starved-hold");
                 }
                 holdsMs_ += 50;
-                rampNext = true;
             } else if (batchOpen_) {
                 streamState_ = ST_FILLING;
             } else {
@@ -527,8 +524,8 @@ bool MotionInterpolator::interpolateLinear(const JointAngles &target, float feed
     JointAngles start = currentAngles;
 
     // Единый цикл шагов: lerp + outputStep + vTaskDelayUntil (тот же код,
-    # что и execLoop для потока M450 — одинаково для любого источника команды).
-    bool ok = runSteps(start, lim, steps, true);
+    // что и execLoop для потока M450 — одинаково для любого источника команды).
+    bool ok = runSteps(start, target, steps, true);
 
     // Финальная позиция: гарантируем точное достижение целевых углов
     if (ok && moving) {
