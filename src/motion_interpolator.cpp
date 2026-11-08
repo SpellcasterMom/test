@@ -529,7 +529,7 @@ bool MotionInterpolator::interpolateLinear(const JointAngles &target, float feed
 
     // Финальная позиция: гарантируем точное достижение целевых углов
     if (ok && moving) {
-        outputStep(lim);
+        outputStep(target);
         char note[64];
         snprintf(note, sizeof(note), "steps=%d timeMs=%.0f", steps, timeMs);
         setMark("LIN", note);
