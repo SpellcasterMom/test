@@ -201,22 +201,6 @@ struct BatchProf {
 
 // Определения ниже (после outputStep); здесь — только для batchExecute.
 static float chainEase(float t, float rIn, float rOut, float V);
-static BatchProf batchProfFor(bool rampIn, bool rampOut, int steps) {
-    BatchProf p{false, 0.0f, 0.0f, 1.0f};
-    if (!rampIn && !rampOut) {
-        p.trap = true;  // круиз: chainEase с нулевыми рампами = e(t)=t
-        return p;
-    }
-    if (steps < 6) return p;  // кроха — legacy стоп-профиль
-    int rSteps = (int)(steps * CHAIN_RAMP_FRAC + 0.5f);
-    if (rSteps < 2) rSteps = 2;
-    if (2 * rSteps >= steps) return p;  // вырожденный — legacy
-    p.trap = true;
-    p.rIn = rampIn ? (float)rSteps / (float)steps : 0.0f;
-    p.rOut = rampOut ? (float)rSteps / (float)steps : 0.0f;
-    p.V = 1.0f / (1.0f - p.rIn * 0.5f - p.rOut * 0.5f);
-    return p;
-}
 
 // ============================================================================
 // Поток точек M450: планирование отдельно (core0Task), исполнение отдельно
@@ -241,7 +225,6 @@ void MotionInterpolator::execLoop() {
     // Serial здесь НЕ трогаем (он у core0Task): стоп приходит флагом.
     JointAngles qPrev;
     bool havePrev = false;
-    bool rampNext = true;  // первая нога забега — с разгоном
     TickType_t slot = xTaskGetTickCount();
     for (;;) {
         // Отложенный сброс из stop()/ISR: только здесь (task-контекст).
@@ -313,35 +296,13 @@ void MotionInterpolator::execLoop() {
         int steps = (int)(wp.segMs / STEP_INTERVAL_MS);
         int minSteps = (int)(MIN_LEG_MS / STEP_INTERVAL_MS);  // минимум для плавности
         if (steps < minSteps) steps = minSteps;
-        // Последняя нога (закрылись и кольцо пусто) — тормозим на ней же.
-        // Иначе S0, пришедший посреди неё, давал бы квант-стоп в конце.
-        bool lastLeg = streamClosing_ && streamQ_ &&
-                       (uxQueueMessagesWaiting(streamQ_) == 0);
-        BatchProf pr = batchProfFor(rampNext, lastLeg, steps);
-        rampNext = false;  // разгон — только первой ноге забега
-        bool legOk = true;
-        for (int step = 0; step <= steps; step++) {
-            if (!moving || streamAbortReq_) { legOk = false; break; }
-            uint32_t st0 = millis();
-            float t = (float)step / steps;
-            float e = pr.trap ? chainEase(t, pr.rIn, pr.rOut, pr.V)
-                              : easeInOut(t);
-            JointAngles qq;
-            for (int k = 0; k < 7; k++) {
-                qq.angles[k] = legFrom.angles[k] +
-                    (wp.q.angles[k] - legFrom.angles[k]) * e;
-            }
-            outputStep(qq);
-            qPrev = qq;
-            uint32_t spent = millis() - st0;
-            if (spent > maxStepMs_) maxStepMs_ = spent;
-            vTaskDelayUntil(&slot, pdMS_TO_TICKS((uint32_t)STEP_INTERVAL_MS));
-        }
-        if (!legOk) {
+        // Единый цикл шагов (тот же код, что и moveTo для одиночной команды):
+        if (!runSteps(legFrom, wp.q, steps, true)) {
             // отказ ноги: стоим где встали, поток рвём (хост увидит по S0/марке)
             streamAbortReq_ = true;  // дочистит верх цикла
             continue;
         }
+        qPrev = wp.q;
         currentAngles = qPrev;  // зеркало для S0-синка (читается только в IDLE)
     }
 }
@@ -365,6 +326,28 @@ float MotionInterpolator::legMs(const JointAngles &from, const JointAngles &to,
     if (feedrate > 0.0f && feedrate < 100.0f) pct = feedrate;
     if (pct != 100.0f) maxTime = maxTime * (100.0f / pct);
     return maxTime * 1000.0f;
+}
+
+bool MotionInterpolator::runSteps(const JointAngles &from, const JointAngles &to,
+                                  int steps, bool useEaseInOut) {
+    JointAngles qPrev = from;
+    TickType_t slot = xTaskGetTickCount();
+    for (int step = 0; step <= steps; step++) {
+        if (!moving || streamAbortReq_) return false;
+        uint32_t st0 = millis();
+        float t = (float)step / steps;
+        float e = useEaseInOut ? easeInOut(t) : t;
+        JointAngles qq;
+        for (int k = 0; k < 7; k++) {
+            qq.angles[k] = from.angles[k] + (to.angles[k] - from.angles[k]) * e;
+        }
+        outputStep(qq);
+        qPrev = qq;
+        uint32_t spent = millis() - st0;
+        if (spent > maxStepMs_) maxStepMs_ = spent;
+        vTaskDelayUntil(&slot, pdMS_TO_TICKS((uint32_t)STEP_INTERVAL_MS));
+    }
+    return true;
 }
 
 bool MotionInterpolator::batchExecute() {
@@ -543,44 +526,13 @@ bool MotionInterpolator::interpolateLinear(const JointAngles &target, float feed
     // Сохранение начальных углов для интерполяции
     JointAngles start = currentAngles;
 
-    // Цикл интерполяции
-    for (int step = 0; step <= steps; step++) {
-        // Проверка флага moving для возможности экстренной остановки через stop()
-        if (!moving) break;
-
-        // Проверка serial порта на команду M112 (экстренная остановка)
-        // Читаем все доступные символы до символа новой строки
-        if (Serial.available()) {
-            String line = "";
-            while (Serial.available()) {
-                char c = Serial.read();
-                if (c == '\n' || c == '\r') break;
-                line += c;
-            }
-            line.trim();
-            line.toUpperCase();
-            // Если получена команда M112 — немедленная остановка
-            if (line.startsWith("M112")) {
-                moving = false;
-                setMark("LIN", "stopped-M112");
-                return false;
-            }
-        }
-
-        // Вычисление параметра интерполяции (от 0 до 1)
-        float t = (float)step / steps;
-        // Применение ease-in-out сглаживания для плавного ускорения/замедления
-        float eased = easeInOut(t);
-
-        // Выполнение шага интерполяции (все сервоприводы одновременно)
-        executeStep(start, target, eased);
-        // Задержка между шагами для соблюдения временных интервалов
-        delay((unsigned long)STEP_INTERVAL_MS);
-    }
+    // Единый цикл шагов: lerp + outputStep + vTaskDelayUntil (тот же код,
+    # что и execLoop для потока M450 — одинаково для любого источника команды).
+    bool ok = runSteps(start, lim, steps, true);
 
     // Финальная позиция: гарантируем точное достижение целевых углов
-    if (moving) {
-        executeStep(start, target, 1.0f);
+    if (ok && moving) {
+        outputStep(lim);
         char note[64];
         snprintf(note, sizeof(note), "steps=%d timeMs=%.0f", steps, timeMs);
         setMark("LIN", note);
@@ -588,7 +540,7 @@ bool MotionInterpolator::interpolateLinear(const JointAngles &target, float feed
         setMark("LIN", "stopped");
     }
 
-    return moving;
+    return ok;
 }
 
 /**

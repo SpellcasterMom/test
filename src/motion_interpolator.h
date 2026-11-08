@@ -298,6 +298,18 @@ public:
      */
     float legMs(const JointAngles &from, const JointAngles &to, float feedrate);
 
+    /**
+      * @brief Общий цикл шагов интерполяции: lerp + outputStep + vTaskDelayUntil.
+      * Используется и moveTo (одиночная команда), и execLoop (поток M450) —
+      * единый код для любого источника команды.
+      * @param from Начальные углы
+      * @param to Целевые углы
+      * @param steps Количество шагов (20мс каждый)
+      * @param useEaseInOut Применять ли ease-in-out сглаживание
+      * @return true если шаги выполнены до конца, false при остановке
+      */
+    bool runSteps(const JointAngles &from, const JointAngles &to, int steps, bool useEaseInOut);
+
 private:
     ServoController      *servoCtrl;   // Контроллер сервоприводов
     BacklashCompensator  *backlash;    // Компенсатор люфта
